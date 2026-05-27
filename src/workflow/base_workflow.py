@@ -16,13 +16,13 @@ from PIL import Image
 from selenium import webdriver
 from selenium.common.exceptions import InvalidSessionIdException, NoSuchElementException, TimeoutException
 from selenium.webdriver import ActionChains, Keys
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
+from webdriver_manager.firefox import GeckoDriverManager
 
 
 BY_MAP = {
@@ -42,7 +42,7 @@ class WorkflowCrawler:
         self.config = config
         self.headless = headless
         self.params = params or {}
-        self.driver: Optional[webdriver.Chrome] = None
+        self.driver: Optional[webdriver.Firefox] = None
         self.default_timeout = int(config.get("default_timeout", 15))
         self._download_dir: str = str(
             Path(config.get("download_dir", "output/downloads")).resolve()
@@ -132,80 +132,70 @@ class WorkflowCrawler:
         return all_records
 
     def _start_browser(self) -> None:
-        print(f"[BROWSER] Creating Chrome options...")
+        print("[BROWSER] Creating Firefox options...")
         options = Options()
         if self.headless:
-            options.add_argument("--headless=new")
-        options.add_argument("--disable-gpu")
+            options.add_argument("-headless")
         options.add_argument("--window-size=1600,1000")
-        options.add_argument("--no-sandbox")
-        # 屏蔽 WebDriver 自动化特征，防止 navigator.webdriver=true 被风控检测
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
 
         print(f"[BROWSER] Setting download directory: {self._download_dir}")
         Path(self._download_dir).mkdir(parents=True, exist_ok=True)
-        prefs = {
-            "download.default_directory": self._download_dir,
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True,
-            "safebrowsing.enabled": False,
-        }
-        options.add_experimental_option("prefs", prefs)
+        # Firefox download prefs: save files directly without opening prompt.
+        options.set_preference("browser.download.folderList", 2)
+        options.set_preference("browser.download.dir", self._download_dir)
+        options.set_preference("browser.download.useDownloadDir", True)
+        options.set_preference("browser.download.manager.showWhenStarting", False)
+        options.set_preference(
+            "browser.helperApps.neverAsk.saveToDisk",
+            "application/octet-stream,application/pdf,text/csv,application/zip",
+        )
+        options.set_preference("pdfjs.disabled", True)
 
-        print("[BROWSER] Installing ChromeDriver...")
+        print("[BROWSER] Resolving geckodriver...")
         try:
-            # 检查缓存的 ChromeDriver
-            wdm_cache = Path.home() / ".wdm" / "drivers" / "chromedriver" / "win64"
-            chromedriver_exe = None
-            
-            # 尝试直接查找 Chrome 147 版本（可能在子目录中）
-            chrome_147_paths = [
-                wdm_cache / "147.0.7727.117" / "chromedriver.exe",
-                wdm_cache / "147.0.7727.117" / "chromedriver-win32" / "chromedriver.exe",
-            ]
-            for path in chrome_147_paths:
-                if path.exists():
-                    chromedriver_exe = str(path)
-                    print(f"[BROWSER] Found Chrome 147 driver: {chromedriver_exe}")
-                    break
-            
-            if not chromedriver_exe:
-                # 查找任何可用的 ChromeDriver（按版本倒序）
-                for driver_dir in sorted(wdm_cache.glob("*"), reverse=True):
-                    if driver_dir.is_dir():
-                        # 检查直接的 exe
-                        candidate = driver_dir / "chromedriver.exe"
-                        if candidate.exists():
-                            chromedriver_exe = str(candidate)
-                            print(f"[BROWSER] Using cached ChromeDriver: {driver_dir.name}/chromedriver.exe")
-                            break
-                        # 检查子目录
-                        for subdir in driver_dir.glob("*/chromedriver.exe"):
-                            chromedriver_exe = str(subdir)
-                            print(f"[BROWSER] Using cached ChromeDriver: {driver_dir.name}/{subdir.parent.name}/chromedriver.exe")
-                            break
-                        if chromedriver_exe:
-                            break
-            
-            if not chromedriver_exe:
-                # 回退到 webdriver-manager 下载
-                print("[BROWSER] No cached ChromeDriver found, downloading...")
-                chromedriver_exe = ChromeDriverManager().install()
-            
-            service = Service(chromedriver_exe)
-            self.driver = webdriver.Chrome(service=service, options=options)
+            gecko_exe = self._resolve_geckodriver_path()
+            service = Service(gecko_exe)
+            self.driver = webdriver.Firefox(service=service, options=options)
         except Exception as e:
-            print(f"[BROWSER] Error starting Chrome: {e}")
+            print(f"[BROWSER] Error starting Firefox: {e}")
             raise
-        
-        print("[BROWSER] Chrome started successfully!")
-        print("[BROWSER] Chrome started successfully!")
-        # 运行时覆盖 navigator.webdriver，防止页面 JS 检测到自动化标志
-        self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        })
+
+        print("[BROWSER] Firefox started successfully!")
+
+    def _resolve_geckodriver_path(self) -> str:
+        """Resolve geckodriver path with local-first strategy for restricted networks."""
+        candidates: List[Path] = []
+
+        env_path = os.getenv("GECKODRIVER_PATH")
+        if env_path:
+            candidates.append(Path(env_path))
+
+        path_hit = shutil.which("geckodriver")
+        if path_hit:
+            candidates.append(Path(path_hit))
+
+        candidates.extend([
+            Path("geckodriver.exe"),
+            Path("drivers") / "geckodriver.exe",
+            Path.home() / ".wdm" / "drivers" / "geckodriver" / "win64" / "geckodriver.exe",
+        ])
+
+        cache_root = Path.home() / ".wdm" / "drivers" / "geckodriver"
+        if cache_root.exists():
+            for path in sorted(cache_root.glob("**/geckodriver.exe"), reverse=True):
+                candidates.append(path)
+
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                continue
+            if resolved.exists() and resolved.is_file():
+                print(f"[BROWSER] Using local geckodriver: {resolved}")
+                return str(resolved)
+
+        print("[BROWSER] No local geckodriver found, downloading via webdriver-manager...")
+        return GeckoDriverManager().install()
 
     def _login(self) -> None:
         login_cfg = self.config.get("login", {})

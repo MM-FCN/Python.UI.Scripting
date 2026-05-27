@@ -8,6 +8,13 @@
 
 ## 1. 安装
 
+说明：项目使用 Firefox + geckodriver（由 `webdriver-manager` 自动管理）。
+
+如果公司网络无法访问 GitHub，可手动放置 `geckodriver.exe`：
+
+- 放到项目根目录（`./geckodriver.exe`）或 `./drivers/geckodriver.exe`
+- 或配置环境变量 `GECKODRIVER_PATH` 指向驱动完整路径
+
 ```bash
 python -m venv .venv
 .venv\\Scripts\\activate
