@@ -3,3 +3,4 @@ __pycache__/
 .env
 output/
 .vscode/
+.edge-debug-profile/

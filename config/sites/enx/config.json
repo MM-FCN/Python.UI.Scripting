@@ -1,0 +1,137 @@
+{
+  "base_url": "https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml",
+  "default_timeout": 15,
+  "download_dir": "output/enx/downloads",
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "enx-tracking",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 10,
+          "comment": "页面加载较慢，先固定等待"
+        },
+        {
+          "action": "select",
+          "by": "id",
+          "selector": "enxSptrctrc010:trackingItems",
+          "options": [
+            "House Air Waybill, or B/L",
+            "Purchase Order",
+            "Commercial Invoice",
+            "Customer Reference",
+            "Express Sub",
+            "Container",
+            "Delivery Slip"
+          ],
+          "text": "House Air Waybill, or B/L",
+          "timeout": 15,
+          "comment": "原生select下拉，按文本选择House Air Waybill, or B/L"
+        },
+        {
+        "action": "type",
+        "by": "name",
+        "selector": "enxSptrctrc010:j_idt24",
+        "value": "{{HAWNO}}",
+        "timeout": 20,
+        "clear_first": true
+        },
+        {
+        "action": "click",
+        "by": "id",
+        "selector": "enxSptrctrc010:searchButton",
+        "timeout": 15
+        },
+        {
+          "action": "wait",
+          "by": "xpath",
+          "selector": "//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE']",
+          "timeout": 20,
+          "comment": "等待详情全局信息标签出现"
+        },
+        {
+          "action": "sleep",
+          "seconds": 5,
+          "comment": "标签出现后额外等待，确保全局字段文本渲染完成"
+        }
+      ],
+      "scrape": {
+        "list_by": "css",
+        "list_selector": ".sea_slider .box",
+        "fields": [
+          {
+            "name": "PORT",
+            "by": "css",
+            "selector": ".box_detail .city",
+            "attr": "text"
+          },
+          {
+            "name": "ACTUAL",
+            "by": "xpath",
+            "selector": ".//img[contains(@src,'status_actual')]/following-sibling::span[contains(@class,'flight_no_date')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "PLANNED",
+            "by": "xpath",
+            "selector": ".//img[contains(@src,'status_planed')]/following-sibling::span[contains(@class,'flight_no_date')][1]",
+            "attr": "text"
+          }
+        ],
+        "global_fields": [
+          {
+            "name": "ACTUAL_TIME_OF_DEPARTURE",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'air_info1')]//div[contains(@class,'info_item')][.//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE']]//span[contains(@class,'info_text')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "VESSEL_NAME_VOY_NO",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'air_info1') and contains(@class,'sea_second_level')]//div[contains(@class,'info_item')][.//span[contains(@class,'info_label') and normalize-space()='VESSEL NAME & VOY NO']]//span[contains(@class,'info_text')][1]",
+            "attr": "text"
+          }
+        ],
+        "max_pages": 1,
+        "timeout": 20
+      },
+      "output": {
+        "format": "json",
+        "json_structure": "globals_plus_records",
+        "global_identifier_keys": [
+          "ContainerNo"
+        ],
+        "path": "output/enx/enx_tracking.json"
+      }
+    }
+  ]
+}

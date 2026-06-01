@@ -1,0 +1,154 @@
+{
+  "base_url": "https://cargonavi.com/",
+  "default_timeout": 15,
+  "download_dir": "output/downloads",
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "air_transport_information",
+      "navigation_steps": [
+        {
+          "action": "switch_to_frame",
+          "by": "name",
+          "selector": "showpage",
+          "comment": "切换到主内容frame"
+        },
+        {
+          "action": "type",
+          "by": "css",
+          "selector": "input[name='MAWB']",
+          "value": "{{MAWB}}",
+          "timeout": 60,
+          "comment": "输入MAWB单号"
+        },
+        {
+          "action": "click",
+          "by": "css",
+          "selector": "input[type='submit'][value='Track']",
+          "timeout": 60,
+          "post_click_expect_new_tab": true,
+          "post_click_url_contains": "chorus.thaicargo.com/skychain/app",
+          "post_click_allow_same_tab": false,
+          "verify_timeout": 20,
+          "retry_on_verify_fail": 1,
+          "comment": "点击Track按钮"
+        },
+        {
+          "action": "sleep",
+          "seconds": 5,
+          "comment": "等待新tab句柄稳定后再切换"
+        },
+        {
+          "action": "switch_to_new_tab",
+          "timeout": 30,
+          "allow_same_tab": false,
+          "url_contains": "chorus.thaicargo.com/skychain/app",
+          "comment": "切换到Track新开标签页"
+        },
+        {
+          "action": "wait",
+          "by": "css",
+          "selector": "tr[id^='trackShiptable1rowInner'] table.grdTable",
+          "timeout": 30,
+          "comment": "等待明细表格渲染"
+        },
+        {
+          "action": "sleep",
+          "seconds": 3,
+          "comment": "等待查询结果渲染"
+        },
+        {
+          "action": "scrape_popup",
+          "comment": "抓取状态明细表"
+        }
+      ],
+      "scrape": {
+        "popup_table": {
+          "table_selector": "tr[id^='trackShiptable1rowInner'] table.grdTable",
+          "row_by": "css",
+          "row_selector": "tr[id^='trackShiptable1rowInner'] table.grdTable tbody tr.grdRow",
+          "timeout": 60,
+          "stable_checks": 3,
+          "stable_poll": 0.4,
+
+          "columns": [
+            {
+              "name": "Station",
+              "header": "Station",
+              "by": "css",
+              "selector": "td:nth-child(1)",
+              "attr": "text"
+            },
+            {
+              "name": "StatusDate",
+              "header": "Status Date",
+              "by": "css",
+              "selector": "td:nth-child(2)",
+              "attr": "text"
+            },
+            {
+              "name": "Status",
+              "header": "Status",
+              "by": "css",
+              "selector": "td:nth-child(3)",
+              "attr": "text"
+            },
+            {
+              "name": "FlightDetails",
+              "header": "Flight Details",
+              "by": "css",
+              "selector": "td:nth-child(4)",
+              "attr": "text"
+            },
+            {
+              "name": "Pieces",
+              "header": "Pieces",
+              "by": "css",
+              "selector": "td:nth-child(5)",
+              "attr": "text"
+            },
+            {
+              "name": "Weight",
+              "header": "Weight",
+              "by": "css",
+              "selector": "td:nth-child(6)",
+              "attr": "text"
+            }
+          ]
+        }
+      },
+      "output": {
+        "format": "json",
+        "path": "output/cargonavi/Track_shipment.json"
+      }
+    }
+  ]
+}

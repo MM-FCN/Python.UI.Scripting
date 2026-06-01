@@ -1,0 +1,22 @@
+{
+  "watch": {
+    "_descriptions": {
+      "enabled_by_default": "是否默认启用轮询模式；当未传 --site/--config/--all-sites 时会自动进入 watch。",
+      "interval_seconds": "轮询间隔（秒）。",
+      "input_root": "轮询输入目录，按 input/<site>/*.json 扫描。",
+      "push_timeout_seconds": "回调推送 HTTP 超时时间（秒）。",
+      "push_retries": "回调推送失败后的重试次数（不含首次请求）。",
+      "push_verify_ssl": "回调推送是否校验 HTTPS 证书；false 可跳过自签名证书校验。",
+      "sites": "默认监听的站点列表（目录名），如 cargo、cargonavi。"
+    },
+    "enabled_by_default": true,
+    "interval_seconds": 10,
+    "input_root": "input",
+    "push_timeout_seconds": 30,
+    "push_retries": 1,
+    "push_verify_ssl": false,
+    "sites": [
+      "cargo"
+    ]
+  }
+}

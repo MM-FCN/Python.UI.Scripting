@@ -14,14 +14,23 @@ import cv2
 import numpy as np
 from PIL import Image
 from selenium import webdriver
-from selenium.common.exceptions import InvalidSessionIdException, NoSuchElementException, TimeoutException
+from selenium.common.exceptions import (
+    InvalidSessionIdException,
+    NoSuchElementException,
+    NoSuchWindowException,
+    TimeoutException,
+    WebDriverException,
+)
 from selenium.webdriver import ActionChains, Keys
 from selenium.webdriver.common.by import By
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 
 
@@ -42,7 +51,9 @@ class WorkflowCrawler:
         self.config = config
         self.headless = headless
         self.params = params or {}
-        self.driver: Optional[webdriver.Firefox] = None
+        self.driver: Optional[webdriver.Remote] = None
+        self._browser_name: str = str(config.get("browser", "firefox")).strip().lower()
+        self._attached_existing_browser: bool = False
         self.default_timeout = int(config.get("default_timeout", 15))
         self._download_dir: str = str(
             Path(config.get("download_dir", "output/downloads")).resolve()
@@ -62,8 +73,12 @@ class WorkflowCrawler:
         print("[STEP 1] Starting browser...")
         self._start_browser()
         try:
-            print(f"[STEP 2] Navigating to base URL...")
-            self.driver.get(self.config["base_url"])
+            startup_navigate = bool(self.config.get("startup_navigate", True))
+            if startup_navigate:
+                print(f"[STEP 2] Navigating to base URL...")
+                self._navigate_to_base_url()
+            else:
+                print("[STEP 2] Startup navigation skipped by config.")
             print("[STEP 3] Executing login...")
             self._login()
 
@@ -86,8 +101,12 @@ class WorkflowCrawler:
             raise
         finally:
             if self.driver:
-                print("[BROWSER] Closing browser session...")
-                self.driver.quit()
+                keep_open = bool(self.config.get("keep_browser_open", self._attached_existing_browser))
+                if keep_open:
+                    print("[BROWSER] keep_browser_open=true, leaving browser/session open.")
+                else:
+                    print("[BROWSER] Closing browser session...")
+                    self.driver.quit()
 
     def _run_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """在同一登录会话中顺序执行多个页面任务。"""
@@ -132,35 +151,338 @@ class WorkflowCrawler:
         return all_records
 
     def _start_browser(self) -> None:
-        print("[BROWSER] Creating Firefox options...")
-        options = Options()
-        if self.headless:
-            options.add_argument("-headless")
-        options.add_argument("--window-size=1600,1000")
+        browser = str(self.config.get("browser", "firefox")).strip().lower()
+        self._browser_name = browser
+        page_load_strategy = str(self.config.get("page_load_strategy", "eager")).strip().lower()
+        if page_load_strategy not in {"normal", "eager", "none"}:
+            page_load_strategy = "eager"
 
+        print(f"[BROWSER] Creating {browser} options...")
         print(f"[BROWSER] Setting download directory: {self._download_dir}")
         Path(self._download_dir).mkdir(parents=True, exist_ok=True)
-        # Firefox download prefs: save files directly without opening prompt.
-        options.set_preference("browser.download.folderList", 2)
-        options.set_preference("browser.download.dir", self._download_dir)
-        options.set_preference("browser.download.useDownloadDir", True)
-        options.set_preference("browser.download.manager.showWhenStarting", False)
-        options.set_preference(
-            "browser.helperApps.neverAsk.saveToDisk",
-            "application/octet-stream,application/pdf,text/csv,application/zip",
-        )
-        options.set_preference("pdfjs.disabled", True)
 
-        print("[BROWSER] Resolving geckodriver...")
         try:
-            gecko_exe = self._resolve_geckodriver_path()
-            service = Service(gecko_exe)
-            self.driver = webdriver.Firefox(service=service, options=options)
+            if browser == "edge":
+                options = EdgeOptions()
+                options.use_chromium = True
+                options.page_load_strategy = page_load_strategy
+                edge_cfg = self.config.get("edge", {})
+                if not isinstance(edge_cfg, dict):
+                    edge_cfg = {}
+                edge_stealth_mode = bool(edge_cfg.get("stealth_mode", True))
+                attach_existing = bool(
+                    edge_cfg.get("attach_existing", self.config.get("edge_attach_existing", False))
+                )
+                debugger_address = str(
+                    edge_cfg.get("debugger_address", self.config.get("edge_debugger_address", ""))
+                ).strip()
+                edge_user_data_dir = str(
+                    edge_cfg.get("user_data_dir", self.config.get("edge_user_data_dir", ""))
+                ).strip()
+                edge_extra_args = edge_cfg.get("extra_args", [])
+                if not isinstance(edge_extra_args, list):
+                    edge_extra_args = []
+                if self.headless:
+                    options.add_argument("--headless=new")
+                    options.add_argument("--window-size=1600,1000")
+                else:
+                    options.add_argument("--start-maximized")
+
+                # Keep direct-launch behavior closer to a regular user browser profile.
+                if edge_stealth_mode:
+                    options.add_argument("--disable-blink-features=AutomationControlled")
+                    options.add_argument("--disable-infobars")
+                    options.add_argument("--disable-notifications")
+                    options.add_argument("--no-default-browser-check")
+                    options.add_argument("--no-first-run")
+                    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+                    options.add_experimental_option("useAutomationExtension", False)
+
+                if edge_user_data_dir and not attach_existing:
+                    try:
+                        Path(edge_user_data_dir).mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+                    options.add_argument(f"--user-data-dir={edge_user_data_dir}")
+                    print(f"[BROWSER] Edge direct mode using user data dir: {edge_user_data_dir}")
+
+                for arg in edge_extra_args:
+                    arg_str = str(arg).strip()
+                    if arg_str:
+                        options.add_argument(arg_str)
+
+                options.add_experimental_option("prefs", {
+                    "download.default_directory": self._download_dir,
+                    "download.prompt_for_download": False,
+                    "download.directory_upgrade": True,
+                    "safebrowsing.enabled": True,
+                    "credentials_enable_service": False,
+                    "profile.password_manager_enabled": False,
+                })
+                if attach_existing:
+                    if not debugger_address:
+                        raise ValueError(
+                            "Edge attach mode requires debugger address via edge.debugger_address or edge_debugger_address"
+                        )
+                    options.add_experimental_option("debuggerAddress", debugger_address)
+                    print(f"[BROWSER] Edge attach mode enabled: debuggerAddress={debugger_address}")
+                self._attached_existing_browser = attach_existing
+
+                print("[BROWSER] Resolving msedgedriver...")
+                edge_exe = self._resolve_edgedriver_path()
+                service = EdgeService(edge_exe)
+                self.driver = webdriver.Edge(service=service, options=options)
+            else:
+                options = Options()
+                options.page_load_strategy = page_load_strategy
+                if self.headless:
+                    options.add_argument("-headless")
+                    options.add_argument("--window-size=1600,1000")
+                else:
+                    options.add_argument("--start-maximized")
+
+                # Firefox keeps these args but may ignore Chromium-specific flags.
+                options.add_argument("--disable-blink-features=AutomationControlled")
+                options.add_argument("--disable-infobars")
+
+                options.set_preference("browser.download.folderList", 2)
+                options.set_preference("browser.download.dir", self._download_dir)
+                options.set_preference("browser.download.useDownloadDir", True)
+                options.set_preference("browser.download.manager.showWhenStarting", False)
+                options.set_preference(
+                    "browser.helperApps.neverAsk.saveToDisk",
+                    "application/octet-stream,application/pdf,text/csv,application/zip",
+                )
+                options.set_preference("pdfjs.disabled", True)
+                options.set_preference("dom.webdriver.enabled", False)
+
+                print("[BROWSER] Resolving geckodriver...")
+                gecko_exe = self._resolve_geckodriver_path()
+                service = Service(gecko_exe)
+                self.driver = webdriver.Firefox(service=service, options=options)
+
+            self._bootstrap_stealth_js()
+            if not self.headless:
+                try:
+                    self.driver.maximize_window()
+                    print("[BROWSER] Window maximized.")
+                except Exception as e:
+                    print(f"[BROWSER] Maximize window failed, continue with current size: {e}")
         except Exception as e:
-            print(f"[BROWSER] Error starting Firefox: {e}")
+            print(f"[BROWSER] Error starting {browser}: {e}")
             raise
 
-        print("[BROWSER] Firefox started successfully!")
+        print(f"[BROWSER] {browser} started successfully!")
+
+    def _bootstrap_stealth_js(self) -> None:
+        """Inject stealth JS right after driver init, before any business page navigation."""
+        if not self.driver:
+            return
+        if self._browser_name == "edge":
+            self._install_cdp_stealth_script()
+        if self._attached_existing_browser:
+            print("[BROWSER] Attached existing browser, skip about:blank bootstrap.")
+            self._override_navigator_webdriver()
+            return
+        try:
+            # Use blank page as bootstrap context so we can inject before target-site navigation.
+            self.driver.get("about:blank")
+        except Exception as e:
+            print(f"[BROWSER] about:blank bootstrap skipped: {type(e).__name__}: {e}")
+        self._override_navigator_webdriver()
+
+    def _install_cdp_stealth_script(self) -> None:
+        """Install CDP script so stealth overrides run before every new document."""
+        if not self.driver:
+            return
+        script = """
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+                configurable: true
+            });
+
+            window.chrome = window.chrome || { runtime: {} };
+
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                    { name: 'Chromium PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                    { name: 'Microsoft Edge PDF Viewer', filename: 'internal-edge-pdf-viewer', description: '' }
+                ],
+                configurable: true
+            });
+
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['zh-CN', 'en-US', 'ja-JP'],
+                configurable: true
+            });
+        """
+        try:
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": script},
+            )
+            print("[BROWSER] CDP stealth script installed.")
+        except Exception as e:
+            print(f"[BROWSER] CDP stealth install skipped: {type(e).__name__}: {e}")
+
+    def _override_navigator_webdriver(self) -> None:
+        """Inject JS to override automation-related globals on current document."""
+        if not self.driver:
+            return
+        script = """
+            try {
+                Object.defineProperty(Navigator.prototype, 'webdriver', {
+                    get: () => undefined,
+                    configurable: true
+                });
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined,
+                    configurable: true
+                });
+            } catch (e) {
+                try {
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => false,
+                        configurable: true
+                    });
+                } catch (_) {}
+            }
+
+            try {
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['zh-CN', 'zh', 'en-US', 'en'],
+                    configurable: true
+                });
+            } catch (_) {}
+
+            try {
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'Win32',
+                    configurable: true
+                });
+            } catch (_) {}
+
+            try {
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                    configurable: true
+                });
+            } catch (_) {}
+        """
+        try:
+            self.driver.execute_script(script)
+        except Exception as e:
+            print(f"[BROWSER] navigator.webdriver override skipped: {type(e).__name__}: {e}")
+
+    def _restart_browser(self) -> None:
+        """Restart browser session when startup navigation loses the browsing context."""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            finally:
+                self.driver = None
+        self._start_browser()
+
+    def _ensure_browser_context(self, context: str = "") -> None:
+        """Ensure the current driver is attached to a valid browser window; auto-recover when configured."""
+        if not self.driver:
+            raise RuntimeError("Browser driver is not initialized")
+
+        try:
+            handles = self._get_window_handles_with_retry(retries=2, delay=0.2)
+            if not handles:
+                raise NoSuchWindowException("No browser window handles available")
+            _ = self.driver.current_url
+            return
+        except Exception as e:
+            auto_recover = bool(self.config.get("auto_recover_browser_context", True))
+            marker = f" ({context})" if context else ""
+            if not auto_recover:
+                print(f"[BROWSER] Context check failed{marker}: {type(e).__name__}: {e}")
+                raise
+
+            print(
+                f"[BROWSER] Context invalid{marker}: {type(e).__name__}: {e}. "
+                f"Restarting browser session..."
+            )
+            self._restart_browser()
+            handles = self._get_window_handles_with_retry(retries=2, delay=0.2)
+            if not handles:
+                raise RuntimeError("Browser context recovery failed: no window handles after restart")
+            _ = self.driver.current_url
+
+    def _navigate_to_base_url(self) -> None:
+        """Navigate to base URL with retry for transient Firefox/geckodriver session loss."""
+        url = self.config["base_url"]
+        retry_count = int(self.config.get("startup_nav_retry", 1))
+        max_attempts = max(1, retry_count + 1)
+        page_load_timeout = int(self.config.get("page_load_timeout", 60))
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if not self.driver:
+                    self._start_browser()
+                self.driver.set_page_load_timeout(page_load_timeout)
+                self.driver.get(url)
+                self._override_navigator_webdriver()
+                print(f"[STEP 2] Navigation success on attempt {attempt}/{max_attempts}")
+                return
+            except TimeoutException as e:
+                last_error = e
+                current_url = self._safe_current_url()
+                ready_state = "(unknown)"
+                try:
+                    if self.driver:
+                        ready_state = str(self.driver.execute_script("return document.readyState"))
+                except Exception:
+                    pass
+
+                print(
+                    f"[STEP 2] Navigation timeout on attempt {attempt}/{max_attempts}: {e}. "
+                    f"URL={current_url}, readyState={ready_state}"
+                )
+
+                target_prefix = url.split("#", 1)[0]
+                if current_url != "(unavailable)" and current_url.startswith(target_prefix):
+                    print("[STEP 2] Target URL is already reached despite timeout, continue.")
+                    return
+
+                if attempt < max_attempts:
+                    print("[STEP 2] Restarting browser and retrying navigation after timeout...")
+                    self._restart_browser()
+                    continue
+                raise
+            except (NoSuchWindowException, InvalidSessionIdException) as e:
+                last_error = e
+                print(
+                    f"[STEP 2] Navigation session lost on attempt {attempt}/{max_attempts}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                if attempt < max_attempts:
+                    print("[STEP 2] Restarting browser and retrying navigation...")
+                    self._restart_browser()
+                else:
+                    raise
+            except WebDriverException as e:
+                # Some Firefox failures surface as generic WebDriverException with this message.
+                msg = str(e)
+                if "Browsing context has been discarded" in msg:
+                    last_error = e
+                    print(
+                        f"[STEP 2] Browsing context discarded on attempt {attempt}/{max_attempts}: {e}"
+                    )
+                    if attempt < max_attempts:
+                        print("[STEP 2] Restarting browser and retrying navigation...")
+                        self._restart_browser()
+                        continue
+                raise
+
+        if last_error:
+            raise last_error
 
     def _resolve_geckodriver_path(self) -> str:
         """Resolve geckodriver path with local-first strategy for restricted networks."""
@@ -197,6 +519,41 @@ class WorkflowCrawler:
         print("[BROWSER] No local geckodriver found, downloading via webdriver-manager...")
         return GeckoDriverManager().install()
 
+    def _resolve_edgedriver_path(self) -> str:
+        """Resolve msedgedriver path with local-first strategy for restricted networks."""
+        candidates: List[Path] = []
+
+        env_path = os.getenv("MSEDGEDRIVER_PATH")
+        if env_path:
+            candidates.append(Path(env_path))
+
+        path_hit = shutil.which("msedgedriver")
+        if path_hit:
+            candidates.append(Path(path_hit))
+
+        candidates.extend([
+            Path("drivers") / "msedgedriver.exe",
+            Path("msedgedriver.exe"),
+            Path.home() / ".wdm" / "drivers" / "edgedriver" / "win64" / "msedgedriver.exe",
+        ])
+
+        cache_root = Path.home() / ".wdm" / "drivers" / "edgedriver"
+        if cache_root.exists():
+            for path in sorted(cache_root.glob("**/msedgedriver.exe"), reverse=True):
+                candidates.append(path)
+
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                continue
+            if resolved.exists() and resolved.is_file():
+                print(f"[BROWSER] Using local msedgedriver: {resolved}")
+                return str(resolved)
+
+        print("[BROWSER] No local msedgedriver found, downloading via webdriver-manager...")
+        return EdgeChromiumDriverManager().install()
+
     def _login(self) -> None:
         login_cfg = self.config.get("login", {})
         if not login_cfg.get("enabled", True):
@@ -208,46 +565,75 @@ class WorkflowCrawler:
         if cookie_file and self._load_cookies(login_cfg.get("url", self.config["base_url"]), cookie_file):
             return
 
-        print(f"[LOGIN] Navigating to login URL: {login_cfg.get('url')}")
-        if login_cfg.get("url"):
-            self.driver.get(login_cfg["url"])
+        max_session_attempts = max(1, int(login_cfg.get("session_retry_attempts", 2)))
 
-        self._wait_login_page_ready(login_cfg)
+        def _is_session_lost_error(err: Exception) -> bool:
+            if isinstance(err, (NoSuchWindowException, InvalidSessionIdException)):
+                return True
+            msg = str(err)
+            markers = [
+                "Browsing context has been discarded",
+                "Failed to decode response from marionette",
+                "Tried to run command without establishing a connection",
+                "Browser session ended unexpectedly during login wait.",
+            ]
+            return any(m in msg for m in markers)
 
-        field_delay = float(login_cfg.get("field_delay", 0.35))
+        for session_attempt in range(1, max_session_attempts + 1):
+            try:
+                print(f"[LOGIN] Session attempt {session_attempt}/{max_session_attempts}")
+                print(f"[LOGIN] Navigating to login URL: {login_cfg.get('url')}")
+                if login_cfg.get("url"):
+                    self.driver.get(login_cfg["url"])
+                    self._override_navigator_webdriver()
 
-        for field in login_cfg.get("fields", []):
-            value = field.get("value", "")
-            env_var = field.get("env")
-            if env_var:
-                value = os.getenv(env_var, "")
-            self._type_text(field["by"], field["selector"], value, clear_first=True)
-            time.sleep(field_delay)
+                self._wait_login_page_ready(login_cfg)
 
-        submit = login_cfg.get("submit")
-        if submit:
-            self._click(submit["by"], submit["selector"])
-            # 点击登录后等待服务端响应并触发验证码弹窗
-            post_submit_delay = float(login_cfg.get("post_submit_delay", 2.0))
-            if post_submit_delay > 0:
-                print(f"[LOGIN] Waiting {post_submit_delay}s after submit for captcha to trigger...")
-                time.sleep(post_submit_delay)
+                field_delay = float(login_cfg.get("field_delay", 0.35))
 
-        # 自动处理验证码
-        captcha_cfg = login_cfg.get("captcha")
-        if captcha_cfg:
-            self._wait_captcha_popup(captcha_cfg)
-            self._handle_captcha(captcha_cfg)
+                for field in login_cfg.get("fields", []):
+                    value = field.get("value", "")
+                    env_var = field.get("env")
+                    if env_var:
+                        value = os.getenv(env_var, "")
+                    self._type_text(field["by"], field["selector"], value, clear_first=True)
+                    time.sleep(field_delay)
 
-        # 调试：打印当前 URL，方便确认登录后跳转到哪里
-        time.sleep(2)
-        print(f"[LOGIN] Current URL after captcha: {self.driver.current_url}")
+                submit = login_cfg.get("submit")
+                if submit:
+                    self._click(submit["by"], submit["selector"])
+                    # 点击登录后等待服务端响应并触发验证码弹窗
+                    post_submit_delay = float(login_cfg.get("post_submit_delay", 2.0))
+                    if post_submit_delay > 0:
+                        print(f"[LOGIN] Waiting {post_submit_delay}s after submit for captcha to trigger...")
+                        time.sleep(post_submit_delay)
 
-        self._wait_login_success(login_cfg)
+                # 自动处理验证码
+                captcha_cfg = login_cfg.get("captcha")
+                if captcha_cfg:
+                    self._wait_captcha_popup(captcha_cfg)
+                    self._handle_captcha(captcha_cfg)
 
-        # 登录成功后保存 Cookie
-        if cookie_file:
-            self._save_cookies(cookie_file)
+                # 调试：打印当前 URL，方便确认登录后跳转到哪里
+                time.sleep(2)
+                print(f"[LOGIN] Current URL after captcha: {self._safe_current_url()}")
+
+                self._wait_login_success(login_cfg)
+
+                # 登录成功后保存 Cookie
+                if cookie_file:
+                    self._save_cookies(cookie_file)
+                return
+            except Exception as e:
+                if _is_session_lost_error(e) and session_attempt < max_session_attempts:
+                    print(
+                        f"[LOGIN] Session lost on attempt {session_attempt}/{max_session_attempts}: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    print("[LOGIN] Restarting browser and retrying login...")
+                    self._restart_browser()
+                    continue
+                raise
 
     def _wait_login_page_ready(self, login_cfg: Dict[str, Any]) -> None:
         """等待登录页 JS 和表单可交互，避免页面未初始化就输入。"""
@@ -271,6 +657,7 @@ class WorkflowCrawler:
             return False
         try:
             self.driver.get(base_url)
+            self._override_navigator_webdriver()
             for cookie in json.loads(path.read_text(encoding="utf-8")):
                 cookie.pop("sameSite", None)
                 try:
@@ -296,8 +683,78 @@ class WorkflowCrawler:
     # --------------------------------------------------------------- Captcha
     # Shared captcha support lives in the base workflow so future sites can
     # reuse the same login/captcha pipeline through config only.
+    def _cfg_selectors(self, cfg: Dict[str, Any], key: str) -> List[str]:
+        """Normalize config selector value into a selector list."""
+        val = cfg.get(key, "")
+        if isinstance(val, list):
+            return [str(s).strip() for s in val if str(s).strip()]
+        if isinstance(val, str):
+            return [s.strip() for s in val.split(",") if s.strip()]
+        return []
+
+    def _switch_to_captcha_iframe(self, cfg: Dict[str, Any], probe_selectors: Optional[List[str]] = None) -> bool:
+        """Try switching into captcha iframe, defaulting to DataDome-style iframe selectors."""
+        iframe_selectors = self._cfg_selectors(cfg, "iframe_selector")
+        if not iframe_selectors:
+            iframe_selectors = [
+                "iframe[src*='captcha-delivery.com']",
+                "iframe[title*='CAPTCHA']",
+                "iframe[src*='captcha']",
+            ]
+
+        probe_selectors = [s for s in (probe_selectors or []) if s]
+
+        try:
+            self.driver.switch_to.default_content()
+        except Exception:
+            return False
+
+        for sel in iframe_selectors:
+            try:
+                frames = self.driver.find_elements(By.CSS_SELECTOR, sel)
+            except Exception:
+                continue
+
+            for frame in frames:
+                try:
+                    self.driver.switch_to.default_content()
+                    self.driver.switch_to.frame(frame)
+                    if not probe_selectors:
+                        print(f"[CAPTCHA] Switched to iframe via selector: {sel}")
+                        return True
+                    for p in probe_selectors:
+                        if self.driver.find_elements(By.CSS_SELECTOR, p):
+                            print(f"[CAPTCHA] Switched to captcha iframe via selector: {sel}")
+                            return True
+                except Exception:
+                    continue
+
+        if probe_selectors:
+            try:
+                all_frames = self.driver.find_elements(By.TAG_NAME, "iframe")
+            except Exception:
+                all_frames = []
+
+            for idx, frame in enumerate(all_frames, start=1):
+                try:
+                    self.driver.switch_to.default_content()
+                    self.driver.switch_to.frame(frame)
+                    for p in probe_selectors:
+                        if self.driver.find_elements(By.CSS_SELECTOR, p):
+                            print(f"[CAPTCHA] Switched to captcha iframe by probing frame #{idx}")
+                            return True
+                except Exception:
+                    continue
+
+        try:
+            self.driver.switch_to.default_content()
+        except Exception:
+            pass
+        return False
+
     def _wait_captcha_popup(self, captcha_cfg: Dict[str, Any]) -> None:
         popup_selector = captcha_cfg.get("popup_selector")
+        popup_selectors = self._cfg_selectors(captcha_cfg, "popup_selector")
         popup_timeout = int(captcha_cfg.get("popup_timeout", 15))
         popup_attempts = int(captcha_cfg.get("popup_attempts", 2))
 
@@ -308,11 +765,20 @@ class WorkflowCrawler:
         for attempt in range(1, popup_attempts + 1):
             print(f"[CAPTCHA] Waiting for captcha popup: {popup_selector} (attempt {attempt}/{popup_attempts})")
             try:
+                self._switch_to_captcha_iframe(captcha_cfg, probe_selectors=popup_selectors)
                 self._wait_visible("css", popup_selector, timeout=popup_timeout)
                 print("[CAPTCHA] Captcha popup detected!")
                 time.sleep(0.8)
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
                 return
             except TimeoutException:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
                 if attempt == popup_attempts:
                     print("[CAPTCHA] Popup not found after retries, proceeding to solver...")
                     return
@@ -322,30 +788,90 @@ class WorkflowCrawler:
 
     def _handle_captcha(self, captcha_cfg: Dict[str, Any]) -> None:
         captcha_type = captcha_cfg.get("type", "slider")
-        if captcha_type == "slider":
-            self._solve_slider_captcha(captcha_cfg)
-        else:
-            raise ValueError(f"Unsupported captcha type: {captcha_type}")
+        manual_mode = bool(captcha_cfg.get("manual", False))
+        try:
+            if manual_mode:
+                self._wait_manual_captcha(captcha_cfg)
+            elif captcha_type == "slider":
+                self._solve_slider_captcha(captcha_cfg)
+            elif captcha_type == "checkbox":
+                self._solve_checkbox_captcha(captcha_cfg)
+            else:
+                raise ValueError(f"Unsupported captcha type: {captcha_type}")
+        finally:
+            # Captcha can run in iframe; restore to main document for later steps.
+            try:
+                self.driver.switch_to.default_content()
+            except Exception:
+                pass
+
+    def _wait_manual_captcha(self, cfg: Dict[str, Any]) -> None:
+        """Pause for manual captcha solving and continue once popup disappears or success marker appears."""
+        manual_timeout = int(cfg.get("manual_timeout", 180))
+        popup_selector = cfg.get("popup_selector", "")
+        wait_selector = cfg.get("wait_selector", "")
+        fail_selector = cfg.get("fail_selector", "")
+        fail_text = cfg.get("fail_text", "")
+
+        popup_selectors = self._cfg_selectors(cfg, "popup_selector")
+        self._switch_to_captcha_iframe(cfg, probe_selectors=popup_selectors)
+
+        print(f"[CAPTCHA] Manual mode enabled. Please drag the slider manually within {manual_timeout}s...")
+        deadline = time.time() + manual_timeout
+
+        while time.time() < deadline:
+            if wait_selector:
+                try:
+                    self._wait_visible("css", wait_selector, timeout=2)
+                    print("[CAPTCHA] Manual captcha success marker detected.")
+                    return
+                except Exception:
+                    pass
+
+            if popup_selector:
+                try:
+                    popup_visible = False
+                    for sel in popup_selectors or [popup_selector]:
+                        for el in self.driver.find_elements(By.CSS_SELECTOR, sel):
+                            if el.is_displayed():
+                                popup_visible = True
+                                break
+                        if popup_visible:
+                            break
+                    if not popup_visible:
+                        print("[CAPTCHA] Manual captcha popup disappeared, continue.")
+                        return
+                except Exception:
+                    pass
+
+            if self._is_captcha_failed(fail_selector, fail_text):
+                print("[CAPTCHA] Manual captcha failed message detected, continue waiting...")
+
+            time.sleep(1)
+
+        print("[CAPTCHA] Manual captcha wait timeout reached, continue workflow.")
 
     def _solve_slider_captcha(self, cfg: Dict[str, Any], max_retries: int = 3) -> None:
         """自动识别滑动拼图验证码并完成拖拽。支持多个备选选择器。"""
-        # 获取选择器列表（支持字符串或列表）
-        def get_selectors(key):
-            val = cfg.get(key, "")
-            if isinstance(val, list):
-                return val
-            elif isinstance(val, str):
-                # 字符串中用逗号分隔多个选择器
-                return [s.strip() for s in val.split(",") if s.strip()]
-            return []
-        
-        bg_selectors = get_selectors("bg_selector")
-        piece_selectors = get_selectors("piece_selector")
-        slider_selectors = get_selectors("slider_selector")
+        bg_selectors = self._cfg_selectors(cfg, "bg_selector")
+        piece_selectors = self._cfg_selectors(cfg, "piece_selector")
+        slider_selectors = self._cfg_selectors(cfg, "slider_selector")
+        popup_selectors = self._cfg_selectors(cfg, "popup_selector")
         wait_selector = cfg.get("wait_selector", "")
         fail_selector = cfg.get("fail_selector", "")
         fail_text = cfg.get("fail_text", "")
         timeout = int(cfg.get("timeout", 10))
+
+        fixed_drag_distance = cfg.get("fixed_drag_distance")
+        track_width = cfg.get("track_width")
+        slider_width = cfg.get("slider_width")
+        if fixed_drag_distance is None and track_width is not None and slider_width is not None:
+            try:
+                fixed_drag_distance = int(track_width) - int(slider_width)
+            except Exception:
+                fixed_drag_distance = None
+
+        probe_selectors = list(dict.fromkeys(slider_selectors + bg_selectors + piece_selectors + popup_selectors))
 
         print(f"[CAPTCHA] bg_selectors={bg_selectors}")
         print(f"[CAPTCHA] slider_selectors={slider_selectors}")
@@ -353,6 +879,8 @@ class WorkflowCrawler:
         for attempt in range(1, max_retries + 1):
             print(f"[CAPTCHA] Attempt {attempt}/{max_retries}")
             try:
+                self._switch_to_captcha_iframe(cfg, probe_selectors=probe_selectors)
+
                 # 查找滑块元素
                 slider = None
                 slider_selector = None
@@ -405,13 +933,18 @@ class WorkflowCrawler:
                         gap_x = self._detect_slider_gap(bg_selector, piece_selectors[0] if piece_selectors else None)
 
                 if gap_x is None:
-                    print("[CAPTCHA] All gap detection failed, refreshing captcha and retrying...")
-                    self._recover_captcha(cfg)
-                    time.sleep(1)
-                    continue
+                    if fixed_drag_distance is not None:
+                        drag_distance = int(fixed_drag_distance)
+                        print(f"[CAPTCHA] Gap detection failed, use fixed drag distance={drag_distance}px")
+                    else:
+                        print("[CAPTCHA] All gap detection failed, refreshing captcha and retrying...")
+                        self._recover_captcha(cfg)
+                        time.sleep(1)
+                        continue
+                else:
+                    print(f"[CAPTCHA] Target position x={gap_x}px, slider at x={slider.location['x']}")
+                    drag_distance = gap_x - slider.location["x"]
 
-                print(f"[CAPTCHA] Target position x={gap_x}px, slider at x={slider.location['x']}")
-                drag_distance = gap_x - slider.location["x"]
                 if abs(drag_distance) < 20:
                     print(f"[CAPTCHA] Computed drag too small ({drag_distance}px), refreshing captcha and retrying...")
                     self._recover_captcha(cfg)
@@ -478,6 +1011,125 @@ class WorkflowCrawler:
             return bool(text)
         except Exception:
             return False
+
+    def _solve_checkbox_captcha(self, cfg: Dict[str, Any]) -> None:
+        """Solve checkbox-style verification (e.g. Cloudflare Turnstile checkbox) when present."""
+        checkbox_selectors = self._cfg_selectors(cfg, "checkbox_selector")
+        popup_selectors = self._cfg_selectors(cfg, "popup_selector")
+        success_selectors = self._cfg_selectors(cfg, "success_selector")
+        max_retries = max(1, int(cfg.get("checkbox_retries", 2)))
+
+        if not checkbox_selectors:
+            checkbox_selectors = [
+                "#content input[type='checkbox']",
+                "#content .cb-lb",
+                "#content .cb-i",
+            ]
+
+        probe_selectors = list(dict.fromkeys(checkbox_selectors + popup_selectors))
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                self._switch_to_captcha_iframe(cfg, probe_selectors=probe_selectors)
+
+                clicked = False
+                for sel in checkbox_selectors:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                    for el in elements:
+                        try:
+                            if el.is_displayed() and el.is_enabled():
+                                self.driver.execute_script("arguments[0].click();", el)
+                                print(f"[CAPTCHA] Checkbox clicked via selector: {sel}")
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+                    if clicked:
+                        break
+
+                if not clicked:
+                    print(f"[CAPTCHA] Checkbox not found/clickable (attempt {attempt}/{max_retries})")
+                    time.sleep(0.8)
+                    continue
+
+                time.sleep(1.2)
+
+                # If a success marker is configured, wait briefly for confirmation.
+                if success_selectors:
+                    for success_sel in success_selectors:
+                        try:
+                            self._wait_visible("css", success_sel, timeout=3)
+                            print(f"[CAPTCHA] Checkbox verification success marker found: {success_sel}")
+                            return
+                        except Exception:
+                            continue
+
+                # No explicit success marker configured/found; click was issued, continue workflow.
+                return
+            except Exception as e:
+                print(f"[CAPTCHA] Checkbox solve attempt {attempt} error: {type(e).__name__}: {e}")
+                time.sleep(0.8)
+
+        print("[CAPTCHA] Checkbox captcha not solved after retries; continue workflow.")
+
+    def _handle_captcha_if_exists(self, cfg: Dict[str, Any], context: str = "") -> bool:
+        """Check captcha quickly and solve only when slider/popup is present."""
+        if not isinstance(cfg, dict) or not cfg:
+            return False
+
+        captcha_type = str(cfg.get("type", "slider")).strip().lower()
+        popup_selectors = self._cfg_selectors(cfg, "popup_selector")
+        slider_selectors = self._cfg_selectors(cfg, "slider_selector")
+        checkbox_selectors = self._cfg_selectors(cfg, "checkbox_selector")
+
+        if captcha_type == "checkbox":
+            probe_selectors = list(dict.fromkeys(checkbox_selectors + popup_selectors))
+        else:
+            probe_selectors = list(dict.fromkeys(popup_selectors + slider_selectors))
+
+        if not probe_selectors:
+            probe_selectors = [
+                ".slider .sliderIcon",
+                ".sliderIcon",
+                ".sliderTarget .sliderTargetIcon",
+            ]
+
+        detected = False
+        in_iframe = False
+        try:
+            in_iframe = self._switch_to_captcha_iframe(cfg, probe_selectors=probe_selectors)
+
+            for sel in probe_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                    if any(el.is_displayed() for el in elements):
+                        detected = True
+                        break
+                except Exception:
+                    continue
+
+            if not detected:
+                try:
+                    fallback = self.driver.find_elements(
+                        By.XPATH,
+                        "//div[contains(@class,'slider') or contains(@class,'captcha')]//*[@draggable='true' or contains(@class,'sliderIcon') or contains(@class,'sliderTargetIcon')]",
+                    )
+                    detected = any(el.is_displayed() for el in fallback)
+                except Exception:
+                    detected = False
+
+            if detected:
+                marker = f" ({context})" if context else ""
+                print(f"[CAPTCHA] Detected slider captcha{marker}, handling now...")
+                self._handle_captcha(cfg)
+                return True
+            return False
+        finally:
+            if in_iframe:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
 
     def _recover_captcha(self, cfg: Dict[str, Any]) -> None:
         """验证码失败后尝试刷新/重开验证码。"""
@@ -697,14 +1349,17 @@ class WorkflowCrawler:
             return None
 
     def _get_element_rect(self, element: Any) -> Dict[str, int]:
-        """获取元素在页面中的绝对像素坐标（考虑 devicePixelRatio）。"""
+        """获取元素截图坐标（跨域 iframe 场景下避免读取 window 滚动属性）。"""
         rect = element.rect
-        dpr = self.driver.execute_script("return window.devicePixelRatio;")
-        scroll_x = self.driver.execute_script("return window.scrollX;")
-        scroll_y = self.driver.execute_script("return window.scrollY;")
+        # DataDome 等跨域 iframe 可能禁止访问 pageXOffset/scrollX，
+        # 这里仅使用 Selenium 提供的元素坐标并可选乘以 DPR。
+        try:
+            dpr = self.driver.execute_script("return window.devicePixelRatio;") or 1
+        except Exception:
+            dpr = 1
         return {
-            "left":   int((rect["x"] + scroll_x) * dpr),
-            "top":    int((rect["y"] + scroll_y) * dpr),
+            "left":   int(rect["x"] * dpr),
+            "top":    int(rect["y"] * dpr),
             "width":  int(rect["width"] * dpr),
             "height": int(rect["height"] * dpr),
         }
@@ -781,6 +1436,8 @@ class WorkflowCrawler:
 
     def _perform_steps(self, steps: List[Dict[str, Any]]) -> None:
         print(f"[STEPS] Total steps to perform: {len(steps)}")
+        captcha_cfg = self.config.get("login", {}).get("captcha", {})
+        auto_check_captcha = bool(captcha_cfg.get("auto_check_during_steps", False)) if isinstance(captcha_cfg, dict) else False
         for i, step in enumerate(steps, start=1):
             # 动态替换所有 {{param}} 变量
             if "value" in step and isinstance(step["value"], str):
@@ -791,6 +1448,9 @@ class WorkflowCrawler:
             selector = step.get("selector", "")
             print(f"[STEP {i}] action={action}, by={by}, selector={selector}")
             try:
+                self._ensure_browser_context(context=f"before step {i} ({action})")
+                if auto_check_captcha:
+                    self._handle_captcha_if_exists(captcha_cfg, context=f"before step {i} ({action})")
                 self._do_action(step)
                 print(f"[STEP {i}] action={action} done")
             except Exception as e:
@@ -803,22 +1463,55 @@ class WorkflowCrawler:
         try:
             if action == "switch_to_new_tab":
                 timeout = int(step.get("timeout", self.default_timeout))
-                current_handles = set(self.driver.window_handles)
+                current_handles = set(self._get_window_handles_with_retry())
+                start_url = self._safe_current_url()
+                target_url_contains = str(step.get("url_contains", "")).strip().lower()
                 end_time = time.time() + timeout
                 while time.time() < end_time:
-                    handles = self.driver.window_handles
+                    handles = self._get_window_handles_with_retry(retries=2, delay=0.2)
+
+                    # Prefer a handle whose current URL matches the expected destination.
+                    if target_url_contains:
+                        for h in handles:
+                            try:
+                                self.driver.switch_to.window(h)
+                                cur = (self._safe_current_url() or "").lower()
+                                if target_url_contains in cur:
+                                    print(f"[STEP] Switched to tab by url_contains: {self.driver.current_url}")
+                                    return
+                            except Exception:
+                                continue
+
                     new_handles = [h for h in handles if h not in current_handles]
                     if new_handles:
                         self.driver.switch_to.window(new_handles[-1])
                         print(f"[STEP] Switched to new tab: {self.driver.current_url}")
                         break
+                    # Some sites navigate in the same tab instead of opening a new handle.
+                    if step.get("allow_same_tab", True):
+                        current_url = self._safe_current_url()
+                        if current_url and current_url != start_url:
+                            print(f"[STEP] No new tab handle; continue on current tab URL: {current_url}")
+                            break
                     time.sleep(0.2)
                 else:
                     # Fallback: if no strictly new handle appears, switch to last handle.
-                    handles = self.driver.window_handles
+                    handles = self._get_window_handles_with_retry(retries=2, delay=0.2)
                     if len(handles) > 1:
                         self.driver.switch_to.window(handles[-1])
+                        if target_url_contains:
+                            cur = (self._safe_current_url() or "").lower()
+                            if target_url_contains not in cur:
+                                raise TimeoutException(
+                                    f"No tab URL matched '{target_url_contains}' within {timeout}s"
+                                )
                         print(f"[STEP] Switched to latest tab (fallback): {self.driver.current_url}")
+                    elif step.get("allow_same_tab", True):
+                        current_url = self._safe_current_url()
+                        if current_url and current_url != start_url:
+                            print(f"[STEP] Fallback same-tab URL accepted: {current_url}")
+                            return
+                        raise TimeoutException(f"No new tab opened within {timeout}s and URL unchanged")
                     else:
                         raise TimeoutException(f"No new tab opened within {timeout}s")
             elif action == "switch_to_frame":
@@ -839,21 +1532,32 @@ class WorkflowCrawler:
                 else:
                     raise ValueError(f"Unsupported frame switch method: {by}")
             elif action == "click":
-                self._click(step["by"], step["selector"], timeout=step.get("timeout"))
+                self._click_with_post_verify(step)
             elif action == "click_if_exists":
                 by = self._to_by(step["by"])
                 selector = step["selector"]
-                elements = self.driver.find_elements(by, selector)
+                timeout = float(step.get("timeout", 0))
+                end_time = time.time() + max(0.0, timeout)
                 clicked = False
-                for el in elements:
-                    try:
-                        if el.is_displayed() and el.is_enabled():
-                            self.driver.execute_script("arguments[0].click();", el)
-                            print(f"[STEP] click_if_exists clicked: {selector}")
-                            clicked = True
-                            break
-                    except Exception:
-                        continue
+
+                while True:
+                    elements = self.driver.find_elements(by, selector)
+                    for el in elements:
+                        try:
+                            if el.is_displayed() and el.is_enabled():
+                                self.driver.execute_script("arguments[0].click();", el)
+                                print(f"[STEP] click_if_exists clicked: {selector}")
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+
+                    if clicked:
+                        break
+                    if time.time() >= end_time:
+                        break
+                    time.sleep(0.25)
+
                 if not clicked:
                     print(f"[STEP] click_if_exists no clickable element for: {selector}")
             elif action == "type":
@@ -884,9 +1588,49 @@ class WorkflowCrawler:
                 timeout = int(step.get("timeout", self.default_timeout))
                 WebDriverWait(self.driver, timeout).until(EC.url_contains(step["value"]))
                 print(f"[STEP] URL now contains: {step['value']}")
+            elif action == "log_title":
+                try:
+                    print(f"[PAGE] title: {self.driver.title}")
+                except Exception as e:
+                    print(f"[PAGE] title read failed: {type(e).__name__}: {e}")
             elif action == "goto":
-                self.driver.get(step["url"])
-                print(f"[STEP] Navigated to: {step['url']}")
+                url = step["url"]
+                retries = max(1, int(step.get("retries", 1)))
+                verify_by = step.get("verify_by")
+                verify_selector = step.get("verify_selector")
+                verify_timeout = int(step.get("timeout", self.default_timeout))
+                after_goto_sleep = float(step.get("after_goto_sleep", 0))
+                last_err: Optional[Exception] = None
+
+                for attempt in range(1, retries + 1):
+                    try:
+                        self.driver.get(url)
+                        self._override_navigator_webdriver()
+                        if after_goto_sleep > 0:
+                            time.sleep(after_goto_sleep)
+
+                        if verify_by and verify_selector:
+                            self._wait_visible(verify_by, verify_selector, timeout=verify_timeout)
+
+                        if attempt > 1:
+                            print(f"[STEP] Navigated to: {url} (attempt {attempt}/{retries})")
+                        else:
+                            print(f"[STEP] Navigated to: {url}")
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        if attempt < retries:
+                            print(
+                                f"[STEP] goto verify failed on attempt {attempt}/{retries}: "
+                                f"{type(e).__name__}: {e}. Retrying..."
+                            )
+                            time.sleep(1)
+                            continue
+                        raise
+
+                if last_err:
+                    raise last_err
             elif action == "scroll":
                 y = int(step.get("y", 1000))
                 self.driver.execute_script("window.scrollBy(0, arguments[0]);", y)
@@ -910,6 +1654,111 @@ class WorkflowCrawler:
                 f"selector={step.get('selector')}, url={self._safe_current_url()}"
             )
             raise
+
+    def _get_window_handles_with_retry(self, retries: int = 4, delay: float = 0.25) -> List[str]:
+        last_err: Optional[Exception] = None
+        total = max(1, retries)
+        for idx in range(total):
+            try:
+                return self.driver.window_handles
+            except WebDriverException as e:
+                last_err = e
+                if idx < total - 1:
+                    print(f"[WARN] window_handles read failed (attempt {idx + 1}/{total}), retrying...")
+                    time.sleep(delay)
+        if last_err:
+            raise last_err
+        return []
+
+    def _click_with_post_verify(self, step: Dict[str, Any]) -> None:
+        by = step["by"]
+        selector = step["selector"]
+        timeout = step.get("timeout")
+
+        expect_new_tab = bool(step.get("post_click_expect_new_tab", False))
+        target_url_contains = str(step.get("post_click_url_contains", "")).strip().lower()
+        allow_same_tab = bool(step.get("post_click_allow_same_tab", True))
+        verify_timeout = int(step.get("verify_timeout", timeout or self.default_timeout))
+        retry_on_verify_fail = int(step.get("retry_on_verify_fail", 0))
+
+        # If no post-click checks are configured, keep the original click behavior.
+        if not expect_new_tab and not target_url_contains:
+            self._click(by, selector, timeout=timeout)
+            return
+
+        attempts = max(1, retry_on_verify_fail + 1)
+        for attempt in range(1, attempts + 1):
+            base_handles = set(self._get_window_handles_with_retry(retries=2, delay=0.2))
+            base_url = self._safe_current_url()
+
+            self._click(by, selector, timeout=timeout)
+            verified = self._wait_click_effect(
+                base_handles=base_handles,
+                base_url=base_url,
+                timeout=verify_timeout,
+                expect_new_tab=expect_new_tab,
+                target_url_contains=target_url_contains,
+                allow_same_tab=allow_same_tab,
+            )
+            if verified:
+                print(f"[STEP] click post-verify passed: by={by}, selector={selector}")
+                return
+
+            if attempt < attempts:
+                print(f"[WARN] click post-verify failed (attempt {attempt}/{attempts}), retrying click...")
+
+        raise TimeoutException(
+            f"Click post-verify failed after {attempts} attempt(s): by={by}, selector={selector}, "
+            f"expect_new_tab={expect_new_tab}, url_contains={target_url_contains or '(none)'}"
+        )
+
+    def _wait_click_effect(
+        self,
+        base_handles: set[str],
+        base_url: str,
+        timeout: int,
+        expect_new_tab: bool,
+        target_url_contains: str,
+        allow_same_tab: bool,
+    ) -> bool:
+        end_time = time.time() + timeout
+        base_url_lower = (base_url or "").lower()
+
+        while time.time() < end_time:
+            handles = self._get_window_handles_with_retry(retries=2, delay=0.15)
+            new_handles = [h for h in handles if h not in base_handles]
+
+            if expect_new_tab and new_handles:
+                self.driver.switch_to.window(new_handles[-1])
+                if target_url_contains:
+                    current = (self._safe_current_url() or "").lower()
+                    if target_url_contains in current:
+                        return True
+                else:
+                    return True
+
+            if target_url_contains:
+                for h in handles:
+                    try:
+                        self.driver.switch_to.window(h)
+                        current = (self._safe_current_url() or "").lower()
+                        if target_url_contains not in current:
+                            continue
+                        if expect_new_tab and not allow_same_tab and h in base_handles:
+                            continue
+                        return True
+                    except Exception:
+                        continue
+
+            if allow_same_tab:
+                current_url = (self._safe_current_url() or "").lower()
+                if target_url_contains and target_url_contains in current_url:
+                    return True
+                if not target_url_contains and current_url and current_url != base_url_lower:
+                    return True
+
+            time.sleep(0.2)
+        return False
 
     def _wait_for_download(self, pattern: str, timeout: int, dest: Optional[str] = None) -> str:
         """Block until a matching file appears in the download dir, then copy to dest."""
@@ -1100,26 +1949,41 @@ class WorkflowCrawler:
             return []
         list_selector = scrape_cfg.get("list_selector")
         fields = scrape_cfg.get("fields", [])
+        global_fields = scrape_cfg.get("global_fields", [])
         print(
             f"[SCRAPE] List scraping config: list_selector={list_selector}, "
-            f"fields={len(fields)}"
+            f"fields={len(fields)}, global_fields={len(global_fields)}"
         )
 
         if not list_selector:
             print("[SCRAPE] No list selector, extracting single record from page")
-            return [self._extract_fields_from_element(self.driver, fields)]
+            row = self._extract_fields_from_element(self.driver, fields)
+            global_row = self._extract_fields_from_element(self.driver, global_fields) if global_fields else {}
+            if global_row:
+                row.update(global_row)
+            return [row]
 
         all_records: List[Dict[str, Any]] = []
         max_pages = int(scrape_cfg.get("max_pages", 1))
         next_page = scrape_cfg.get("next_page")
 
         for page in range(1, max_pages + 1):
-            self._wait_visible(scrape_cfg["list_by"], list_selector, timeout=scrape_cfg.get("timeout"))
+            try:
+                self._wait_visible(scrape_cfg["list_by"], list_selector, timeout=scrape_cfg.get("timeout"))
+            except TimeoutException:
+                if scrape_cfg.get("allow_empty", False):
+                    print("[SCRAPE] No list rows found within timeout; allow_empty=true, returning empty records.")
+                    return all_records
+                raise
             items = self.driver.find_elements(self._to_by(scrape_cfg["list_by"]), list_selector)
+            global_row = self._extract_fields_from_element(self.driver, global_fields) if global_fields else {}
             print(f"[INFO] Page {page}, found {len(items)} items")
 
             for item in items:
-                all_records.append(self._extract_fields_from_element(item, fields))
+                row = self._extract_fields_from_element(item, fields)
+                if global_row:
+                    row.update(global_row)
+                all_records.append(row)
 
             if not next_page:
                 break
@@ -1157,6 +2021,9 @@ class WorkflowCrawler:
         except TimeoutException:
             print("[INFO] Next page button not found/clickable. Stop paging.")
             return False
+        except (InvalidSessionIdException, NoSuchWindowException) as e:
+            print(f"[INFO] Pagination stopped due to browser/session disconnect: {type(e).__name__}")
+            return False
         except Exception as e:
             print(f"[ERROR] Next page failed: {type(e).__name__}: {e}")
             print(f"[ERROR] URL when paging failed: {self._safe_current_url()}")
@@ -1179,6 +2046,7 @@ class WorkflowCrawler:
 
         # 优先使用 popup_data（从弹出框爬取的数据）
         data_to_save = self.popup_data if self.popup_data else records
+        data_to_save = self._attach_request_identifiers(data_to_save)
         source = "popup_data" if self.popup_data else "records"
         print(f"[OUTPUT] Data source={source}, count={len(data_to_save)}, path={output_path}")
 
@@ -1187,15 +2055,89 @@ class WorkflowCrawler:
         elif fmt == "csv":
             self._save_csv(output_path, data_to_save)
         else:
+            json_structure = str(output_cfg.get("json_structure", "")).strip().lower()
+            payload: Any = data_to_save
+            if json_structure == "globals_plus_records":
+                payload = self._build_globals_plus_records_payload(data_to_save)
             with output_path.open("w", encoding="utf-8") as f:
-                json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+                json.dump(payload, f, ensure_ascii=False, indent=2)
 
         print(f"[INFO] Saved {len(data_to_save)} records to {output_path}")
+
+    def _attach_request_identifiers(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Attach request identifiers (MAWB/ContainerNo/HAWNO) to each saved record when available."""
+        if not records:
+            return records
+
+        tracked_keys = ("MAWB", "ContainerNo", "HAWNO")
+        enriched: List[Dict[str, Any]] = []
+        for item in records:
+            row = dict(item) if isinstance(item, dict) else {"value": item}
+            for key in tracked_keys:
+                value = self.params.get(key)
+                if value and key not in row:
+                    row[key] = value
+            enriched.append(row)
+        return enriched
 
     def _append_timestamp_to_path(self, path: Path) -> Path:
         """Append a timestamp so each JSON run writes to a unique file."""
         ts = time.strftime("%Y%m%d_%H%M%S")
         return path.with_name(f"{path.stem}_{ts}{path.suffix}")
+
+    def _build_globals_plus_records_payload(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Promote global values to top-level and keep detail rows under records."""
+        output_cfg = self.config.get("output", {})
+        configured_keys = output_cfg.get("global_identifier_keys", ["ContainerNo", "MAWB", "HAWNO"])
+        if isinstance(configured_keys, list):
+            tracked_keys = tuple(str(k).strip() for k in configured_keys if str(k).strip())
+        else:
+            tracked_keys = ("ContainerNo", "MAWB", "HAWNO")
+        scrape_cfg = self.config.get("scrape", {}) or {}
+        global_fields = scrape_cfg.get("global_fields", [])
+        global_field_names = [
+            str(field.get("name", "")).strip()
+            for field in global_fields
+            if isinstance(field, dict) and str(field.get("name", "")).strip()
+        ]
+
+        globals_payload: Dict[str, Any] = {}
+
+        # Prefer runtime params; for ENX HAWNO input, mirror it to ContainerNo when missing.
+        for key in tracked_keys:
+            value = self.params.get(key)
+            if not value and key == "ContainerNo":
+                value = self.params.get("HAWNO")
+            if value:
+                globals_payload[key] = value
+
+        # Pull page-level global fields from records (first non-empty wins).
+        for name in global_field_names:
+            selected = ""
+            for row in records:
+                if not isinstance(row, dict):
+                    continue
+                raw = row.get(name)
+                if raw is not None and str(raw).strip():
+                    selected = str(raw).strip()
+                    break
+            if not selected and records and isinstance(records[0], dict) and name in records[0]:
+                raw = records[0].get(name)
+                selected = "" if raw is None else str(raw).strip()
+            globals_payload[name] = selected
+
+        remove_keys = set(tracked_keys) | set(global_field_names)
+        remove_keys.add("HAWNO")
+        details: List[Dict[str, Any]] = []
+        for row in records:
+            if not isinstance(row, dict):
+                details.append({"value": row})
+                continue
+            details.append({k: v for k, v in row.items() if k not in remove_keys})
+
+        payload: Dict[str, Any] = dict(globals_payload)
+        payload["records"] = details
+        return payload
 
     def _save_txt(self, output_path: Path, records: List[Dict[str, Any]]) -> None:
         """保存为文本格式，每条记录一行"""
@@ -1300,3 +2242,25 @@ class WorkflowCrawler:
         if clear_first:
             element.clear()
         element.send_keys(text)
+
+        actual = (element.get_attribute("value") or "")
+        expected = "" if text is None else str(text)
+        if actual != expected:
+            # Some sites bind key events twice under automation and duplicate characters.
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const val = arguments[1];
+                el.focus();
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                """,
+                element,
+                expected,
+            )
+            corrected = (element.get_attribute("value") or "")
+            print(
+                f"[ACTION] type value corrected: by={by}, selector={selector}, "
+                f"before='{actual}', after='{corrected}'"
+            )

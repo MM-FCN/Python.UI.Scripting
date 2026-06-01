@@ -1,0 +1,202 @@
+{
+  "_descriptions": {
+    "browser": "建议使用 edge；接管模式仅对 edge 生效。",
+    "browser_startup.mode": "浏览器启动策略：system=系统直接由 Selenium 启动；batch_attach=先执行批处理启动浏览器再接管。",
+    "browser_startup.batch_file": "batch_attach 模式下要执行的批处理文件路径（可相对项目根目录）。",
+    "browser_startup.args": "批处理启动参数数组（可选），这里可传入 CMA 页面 URL。",
+    "browser_startup.wait_seconds": "执行批处理后等待秒数，给浏览器预热与端口启动时间。",
+    "browser_startup.run_once": "true=站点在本次 watcher 生命周期中只启动一次批处理。",
+    "startup_navigate": "true=启动后先打开 base_url；false=接管现有浏览器时不强制跳转。",
+    "auto_recover_browser_context": "true=检测到接管窗口失效时自动重建浏览器会话后继续步骤。",
+    "keep_browser_open": "任务结束后是否保持浏览器打开（接管场景建议 true）。",
+    "edge.attach_existing": "true=接管已手动打开的 Edge；false=由脚本新开浏览器。",
+    "edge.debugger_address": "Edge 远程调试地址，默认 127.0.0.1:9222。",
+    "edge.stealth_mode": "直启模式下是否启用低指纹启动参数（默认 true）。",
+    "edge.user_data_dir": "直启模式可复用的 Edge 用户数据目录（可降低新环境风险）。",
+    "edge.extra_args": "直启模式追加启动参数数组（可选）。"
+  },
+  "browser": "edge",
+  "base_url": "https://www.cma-cgm.com/",
+  "startup_navigate": false,
+  "auto_recover_browser_context": true,
+  "keep_browser_open": false,
+  "edge": {
+    "stealth_mode": true,
+    "user_data_dir": "C:/fcn/MyEdgeDataCmaDirect",
+    "attach_existing": false,
+    "debugger_address": "127.0.0.1:9222"
+  },
+  "browser_startup": {
+    "mode": "system",
+    "batch_file": "run_edge_cma_9222.bat",
+    "args": [
+      "https://www.cma-cgm.com/ebusiness/tracking/search"
+    ],
+    "wait_seconds": 3,
+    "run_once": true
+  },
+  "default_timeout": 15,
+  "download_dir": "output/cma/downloads",
+  "log": {
+    "retention_days": 30
+  },
+"login": {
+    "enabled": false,
+    "url": "https://www.cma-cgm.com/",
+    "fields": [],
+    "captcha": {
+      "type": "slider",
+      "manual": false,
+      "auto_check_during_steps": true,
+      "iframe_selector": "iframe[src*='captcha-delivery.com'], iframe[title*='CAPTCHA'], iframe[src*='captcha']",
+      "popup_selector": ".slider .sliderIcon, .sliderTarget .sliderTargetIcon",
+      "popup_timeout": 20,
+      "canvas_selector": "",
+      "piece_img_selector": "",
+      "bg_selector": ".sliderContainer .sliderbg, .sliderbg, .sliderMask",
+      "piece_selector": ".sliderContainer .sliderTarget, .sliderTarget, .sliderTargetIcon",
+      "slider_selector": ".slider .sliderIcon, .sliderIcon",
+      "track_width": 280,
+      "slider_width": 63,
+      "fixed_drag_distance": 217,
+      "wait_selector": "",
+      "fail_selector": ".login-error-msg",
+      "fail_text": "图形验证不通过",
+      "reopen_by": "css",
+      "reopen_selector": "button.login-submit",
+      "refresh_selector": ".retryLink, button.retryLink, button[aria-label*='Retry'], .slider-refresh, .captcha-refresh, .iconfont.icon-shuaxin",
+      "timeout": 15
+    },
+    "wait_success": {
+      "type": "url_not_contains",
+      "value": "/login",
+      "timeout": 30
+    }
+  },
+  "tasks": [
+    {
+      "name": "cma-tracking",
+      "navigation_steps": [
+        {
+          "action": "goto",
+          "url": "https://www.cma-cgm.com/ebusiness/tracking/search",
+          "retries": 3,
+          "verify_by": "css",
+          "verify_selector": "#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container']",
+          "timeout": 20,
+          "after_goto_sleep": 1,
+          "comment": "接管后先落到查询页并验证输入框可见，避免落在NTP/错误页面"
+        },
+        {
+          "action": "sleep",
+          "seconds": 4,
+          "comment": "页面加载后预留时间，便于验证码或反爬组件稳定"
+        },
+      
+        {
+          "action": "type",
+          "by": "css",
+          "selector": "#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container']",
+          "value": "{{ContainerNo}}",
+          "timeout": 20,
+          "clear_first": true,
+          "comment": "输入追踪号"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "css",
+          "selector": "#btnTracking[name='search'], #btnTracking, #searchTracking, #SearchBtn, button[name='SearchViewModel.SearchBtn'], input[name='SearchViewModel.SearchBtn'], .tracking-search button[type='submit'], .k-button[type='submit'], button[id*='search'][type='button'], button[aria-label*='Search'], button[type='submit']",
+          "timeout": 6,
+          "comment": "优先尝试点击搜索按钮，若不可点则由下一步回车提交兜底"
+        },
+        {
+          "action": "press_enter",
+          "by": "css",
+          "selector": "#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container']",
+          "timeout": 20,
+          "comment": "按钮不可点时，直接在输入框回车触发搜索"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "xpath",
+          "selector": "//a[@aria-label='Display Previous Moves'] | //a[normalize-space()='Display Previous Moves'] | //a[contains(@class,'k-svg-i-caret-alt-right') and contains(@class,'k-icon')]",
+          "timeout": 20,
+          "comment": "尝试展开历史轨迹（元素延迟出现时轮询点击）"
+        },
+        {
+          "action": "wait",
+          "by": "xpath",
+          "selector": "//a[@aria-label='Hide Previous Moves'] | //a[normalize-space()='Hide Previous Moves'] | //a[contains(@class,'k-svg-i-caret-alt-down') and contains(@class,'k-icon')]",
+          "timeout": 20,
+          "comment": "确认历史轨迹已展开（按钮状态切换为Hide Previous Moves）"
+        },
+        {
+          "action": "sleep",
+          "seconds": 5,
+          "comment": "等待页面渲染完成后再执行爬取"
+        }
+      ],
+      "scrape": {
+        "list_by": "css",
+        "list_selector": "table.k-grid-table tbody.k-table-tbody tr.k-table-row",
+        "global_fields": [
+          {
+            "name": "ArrivedAtPODTime",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'timeline--item-eta')][.//span[contains(@class,'capsule') and normalize-space()='Arrived at POD']]//p",
+            "attr": "text"
+          }
+        ],
+        "fields": [
+          {
+            "name": "Date",
+            "by": "css",
+            "selector": "td.date .calendar",
+            "attr": "text"
+          },
+          {
+            "name": "Time",
+            "by": "css",
+            "selector": "td.date .time",
+            "attr": "text"
+          },
+          {
+            "name": "Status",
+            "by": "css",
+            "selector": "td:nth-child(4) .capsule",
+            "attr": "text"
+          },
+          {
+            "name": "Location",
+            "by": "css",
+            "selector": "td.location div.location > span",
+            "attr": "text"
+          },
+          {
+            "name": "Vessel",
+            "by": "css",
+            "selector": "td.vesselVoyage a:nth-of-type(1)",
+            "attr": "text"
+          },
+          {
+            "name": "Voyage",
+            "by": "css",
+            "selector": "td.vesselVoyage a:nth-of-type(2)",
+            "attr": "text"
+          }
+        ],
+        "max_pages": 5,
+        "next_page": {
+          "by": "css",
+          "selector": ".pagination .next",
+          "after_click_sleep": 1.5,
+          "timeout": 10
+        }
+      },
+      "output": {
+        "format": "json",
+        "path": "output/cma/cma_tracking.json"
+      }
+    }
+  ]
+}

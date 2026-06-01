@@ -1,0 +1,51 @@
+{
+  "browser": "edge",
+  "base_url": "",
+  "default_timeout": 15,
+  "download_dir": "output/downloads",
+  "startup_navigate": false,
+  "keep_browser_open": true,
+  "edge": {
+    "attach_existing": true,
+    "debugger_address": "127.0.0.1:9222"
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "navigation_steps": [
+    {
+      "action": "log_title",
+      "comment": "打印接管后的当前页面标题"
+    }
+  ],
+  "scrape": {
+    "skip": true
+  },
+  "output": {
+    "format": "json",
+    "path": "output/edge_attach/attach_result.json"
+  }
+}

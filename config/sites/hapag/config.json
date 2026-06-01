@@ -1,0 +1,178 @@
+{
+  "_descriptions": {
+    "browser": "建议使用 edge；接管模式仅对 edge 生效。",
+    "browser_startup.mode": "浏览器启动策略：system=系统直接由 Selenium 启动；batch_attach=先执行批处理启动浏览器再接管。",
+    "browser_startup.batch_file": "batch_attach 模式下要执行的批处理文件路径（可相对项目根目录）。",
+    "browser_startup.args": "批处理启动参数数组（可选）。",
+    "browser_startup.wait_seconds": "执行批处理后等待秒数，给浏览器预热与端口启动时间。",
+    "browser_startup.run_once": "true=站点在本次 watcher 生命周期中只启动一次批处理。",
+    "startup_navigate": "true=启动后先打开 base_url；false=接管现有浏览器时不强制跳转。",
+    "keep_browser_open": "任务结束后是否保持浏览器打开（接管场景建议 true）。",
+    "edge.attach_existing": "true=接管已手动打开的 Edge；false=由脚本新开浏览器。",
+    "edge.debugger_address": "Edge 远程调试地址，默认 127.0.0.1:9222。"
+  },
+  "browser": "edge",
+  "base_url": "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html",
+  "startup_navigate": true,
+  "keep_browser_open": true,
+  "edge": {
+    "stealth_mode": true,
+    "user_data_dir": "C:/fcn/MyEdgeDataHapagDirect",
+    "attach_existing": false,
+    "debugger_address": "127.0.0.1:9222"
+  },
+  "browser_startup": {
+    "mode": "system",
+    "batch_file": "run_edge_hapag_9222.bat",
+    "args": [],
+    "wait_seconds": 3,
+    "run_once": true
+  },
+  "default_timeout": 15,
+  "download_dir": "output/hapag/downloads",
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "captcha": {
+      "type": "checkbox",
+      "auto_check_during_steps": true,
+      "iframe_selector": "iframe[src*='challenge-platform'], iframe[title*='challenge'], iframe[src*='turnstile']",
+      "popup_selector": "#content, #BbLB6, .cb-c",
+      "checkbox_selector": "#content input[type='checkbox'], #content label.cb-lb, #content .cb-i, #content span.cb-lb-t",
+      "success_selector": "#success[style*='display: flex'], #success-text, #success-i",
+      "checkbox_retries": 2
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "hapag-tracking",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 10,
+          "comment": "页面加载较慢，先固定等待"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "css",
+          "selector": "#accept-recommended-btn-handler",
+          "timeout": 6,
+          "comment": "若出现Cookie弹窗，点击Select All"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "xpath",
+          "selector": "//span[normalize-space()='Verify you are human']/ancestor::label | //div[@id='content']//label[contains(@class,'cb-lb')] | //div[@id='content']//input[@type='checkbox']",
+          "timeout": 8,
+          "comment": "Cloudflare 人机校验出现时勾选复选框，未出现则跳过"
+        },
+        {
+          "action": "sleep",
+          "seconds": 2,
+          "comment": "勾选后短暂等待验证状态更新"
+        },
+        {
+          "action": "type",
+          "by": "xpath",
+          "selector": "//input[@id='tracing_by_container_f:hl12']",
+          "value": "{{ContainerNo}}",
+          "timeout": 20,
+          "clear_first": true,
+          "comment": "输入ContainerNo"
+        },
+        {
+          "action": "click",
+          "by": "xpath",
+          "selector": "//button[@id='tracing_by_container_f:hl25']",
+          "timeout": 15
+        },
+        {
+          "action": "sleep",
+          "seconds": 0.8,
+          "comment": "等待下拉选项浮层渲染"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "xpath",
+          "selector": "//li[@role='option' and normalize-space()='All'] | //li[@data-testid='tnt-search-multiple-item' and normalize-space()='All'] | //div[@role='option' and normalize-space()='All'] | //button[normalize-space()='All']",
+          "timeout": 20,
+          "comment": "下拉选项可能延迟出现，轮询点击All"
+        },
+        {
+        "action": "type",
+        "by": "css",
+        "selector": "input[data-testid='tnt-search-multiple-input']",
+        "value": "{{ContainerNo}}",
+        "timeout": 20,
+        "clear_first": true
+        },
+        {
+        "action": "click",
+        "by": "css",
+        "selector": "button[data-testid='tnt-search-multiple-button']",
+        "timeout": 15
+        }
+      ],
+      "scrape": {
+        "list_by": "css",
+        "list_selector": "#event-table-container-id table.EventTable_table-container__Qioyi tr.EventTable_table-row__yVKnA",
+        "fields": [
+          {
+            "name": " Place",
+            "by": "css",
+            "selector": "td:nth-child(1) .EventTable_country-name__fax8l",
+            "attr": "text"
+          },
+          {
+            "name": "Event",
+            "by": "css",
+            "selector": "td:nth-child(2) .EventTable_event-name-vessel-group__sDbkT > div:first-child",
+            "attr": "text"
+          },
+          {
+            "name": "DateTime",
+            "by": "css",
+            "selector": "td:nth-child(2) .EventDate_event-date-container__dLSip",
+            "attr": "text"
+          }
+        ],
+        "max_pages": 5,
+        "next_page": {
+          "by": "css",
+          "selector": ".pagination .next",
+          "after_click_sleep": 1.5,
+          "timeout": 10
+        }
+      },
+      "output": {
+        "format": "json",
+        "path": "output/hapag/hapag_tracking.json"
+      }
+    }
+  ]
+}
