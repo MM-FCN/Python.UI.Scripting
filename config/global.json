@@ -16,7 +16,7 @@
     "push_retries": 1,
     "push_verify_ssl": false,
     "sites": [
-      "cargo"
+      "cma"
     ]
   }
 }

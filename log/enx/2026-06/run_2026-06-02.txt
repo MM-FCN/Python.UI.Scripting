@@ -1,0 +1,206 @@
+[LOG] Writing runtime logs to: C:\fcn\Projects\Python.UI.Scripting\log\enx\2026-06\run_2026-06-02.txt
+[LOG] Retention days: 30
+[LOG] Site scope: enx
+[PARAMS] Runtime params: ['HAWNO']
+
+============================================================
+[TASK] Config: config\sites\enx\config.json
+============================================================
+[START] Crawler initializing...
+[CONFIG] Base URL: https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[STEP 1] Starting browser...
+[BROWSER] Creating firefox options...
+[BROWSER] Setting download directory: C:\fcn\Projects\Python.UI.Scripting\output\enx\downloads
+[BROWSER] Resolving geckodriver...
+[BROWSER] Using local geckodriver: C:\fcn\Projects\Python.UI.Scripting\geckodriver.exe
+[BROWSER] Window maximized.
+[BROWSER] firefox started successfully!
+[STEP 2] Navigating to base URL...
+[STEP 2] Navigation success on attempt 1/2
+[STEP 3] Executing login...
+[INFO] Login is disabled by config.
+[STEP 4] Running 1 task(s) after login...
+[TASK 1] enx-tracking started
+[TASK 1] navigation steps: 6
+[STEPS] Total steps to perform: 6
+[STEP 1] action=sleep, by=, selector=
+[STEP] Sleeping 10.0s
+[STEP 1] action=sleep done
+[STEP 2] action=select, by=id, selector=enxSptrctrc010:trackingItems
+[STEP 2] action=select done
+[STEP 3] action=type, by=name, selector=enxSptrctrc010:j_idt24
+[STEP] type input value: HAMDLA73631
+[STEP 3] action=type done
+[STEP 4] action=click, by=id, selector=enxSptrctrc010:searchButton
+[ACTION] click success via ActionChains: by=id, selector=enxSptrctrc010:searchButton
+[STEP 4] action=click done
+[STEP 5] action=wait, by=xpath, selector=//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE']
+[STEP 5] action=wait done
+[STEP 6] action=sleep, by=, selector=
+[STEP] Sleeping 5.0s
+[STEP 6] action=sleep done
+[SCRAPE] List scraping config: list_selector=.sea_slider .box, fields=3, global_fields=2
+[INFO] Page 1, found 4 items
+[INFO] Scrape done, total records: 4
+[OUTPUT] Saving records: format=json
+[OUTPUT] Data source=records, count=4, path=output\enx\enx_tracking_20260602_095305.json
+[INFO] Saved 4 records to output\enx\enx_tracking_20260602_095305.json
+[TASK 1] enx-tracking completed, records=4 (popup_records=0, list_records=4)
+[TASK] All tasks finished, total aggregated records=4
+[SUCCESS] Crawler completed!
+[BROWSER] Closing browser session...
+[DONE] Crawl finished. Records: 4
+[LOG] Writing runtime logs to: C:\fcn\Projects\Python.UI.Scripting\log\enx\2026-06\run_2026-06-02.txt
+[LOG] Retention days: 30
+[LOG] Site scope: enx
+[PARAMS] Runtime params: ['HAWNO']
+
+============================================================
+[TASK] Config: config\sites\enx\config.json
+============================================================
+[START] Crawler initializing...
+[CONFIG] Base URL: https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[STEP 1] Starting browser...
+[BROWSER] Creating firefox options...
+[BROWSER] Setting download directory: C:\fcn\Projects\Python.UI.Scripting\output\enx\downloads
+[BROWSER] Resolving geckodriver...
+[BROWSER] Using local geckodriver: C:\fcn\Projects\Python.UI.Scripting\geckodriver.exe
+[BROWSER] firefox started successfully!
+[STEP 2] Navigating to base URL...
+[STEP 2] Navigation success on attempt 1/2
+[STEP 3] Executing login...
+[INFO] Login is disabled by config.
+[STEP 4] Running 1 task(s) after login...
+[TASK 1] enx-tracking started
+[TASK 1] navigation steps: 6
+[STEPS] Total steps to perform: 6
+[STEP 1] action=sleep, by=, selector=
+[STEP] Sleeping 10.0s
+[STEP 1] action=sleep done
+[STEP 2] action=select, by=id, selector=enxSptrctrc010:trackingItems
+[STEP 2] action=select done
+[STEP 3] action=type, by=name, selector=enxSptrctrc010:j_idt24
+[STEP] type input value: HAMDLA73631
+[STEP 3] action=type done
+[STEP 4] action=click, by=id, selector=enxSptrctrc010:searchButton
+[ACTION] click success via ActionChains: by=id, selector=enxSptrctrc010:searchButton
+[STEP 4] action=click done
+[STEP 5] action=wait, by=xpath, selector=//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE']
+[WAIT] visible timeout: by=xpath, selector=//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE'], timeout=20s
+[WAIT] URL=https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[ERROR] Action failed: action=wait, by=xpath, selector=//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE'], url=https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[ERROR] Step 5 failed: action=wait, err=TimeoutException: Message: 
+Stacktrace:
+RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
+WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
+NoSuchElementError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:552:5
+dom.find/</<@chrome://remote/content/shared/DOM.sys.mjs:136:16
+
+[ERROR] Step context URL: https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[ERROR] Task 'enx-tracking' failed: TimeoutException: Message: 
+Stacktrace:
+RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
+WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
+NoSuchElementError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:552:5
+dom.find/</<@chrome://remote/content/shared/DOM.sys.mjs:136:16
+
+[ERROR] URL when task failed: https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[ERROR] Run failed: TimeoutException: Message: 
+Stacktrace:
+RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
+WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
+NoSuchElementError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:552:5
+dom.find/</<@chrome://remote/content/shared/DOM.sys.mjs:136:16
+
+[ERROR] Task=enx-tracking, URL=https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[BROWSER] Closing browser session...
+[ERROR] Message: 
+Stacktrace:
+RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
+WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
+NoSuchElementError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:552:5
+dom.find/</<@chrome://remote/content/shared/DOM.sys.mjs:136:16
+
+Traceback (most recent call last):
+  File "C:\fcn\Projects\Python.UI.Scripting\src\main.py", line 123, in run_config
+    records = crawler.run()
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 88, in run
+    records = self._run_tasks(tasks)
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 130, in _run_tasks
+    self._perform_steps(nav_steps)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 1457, in _perform_steps
+    self._do_action(step)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 1587, in _do_action
+    self._wait_visible(step["by"], step["selector"], timeout=step.get("timeout"))
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 2181, in _wait_visible
+    raise e
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 2175, in _wait_visible
+    return WebDriverWait(self.driver, timeout).until(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        EC.visibility_of_element_located((self._to_by(by), selector))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\CFU6SZH\AppData\Local\Programs\Python\Python313\Lib\site-packages\selenium\webdriver\support\wait.py", line 146, in until
+    raise TimeoutException(message, screen, stacktrace)
+selenium.common.exceptions.TimeoutException: Message: 
+Stacktrace:
+RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
+WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
+NoSuchElementError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:552:5
+dom.find/</<@chrome://remote/content/shared/DOM.sys.mjs:136:16
+
+[LOG] Writing runtime logs to: C:\fcn\Projects\Python.UI.Scripting\log\enx\2026-06\run_2026-06-02.txt
+[LOG] Retention days: 30
+[LOG] Site scope: enx
+[PARAMS] Runtime params: ['HAWNO']
+
+============================================================
+[TASK] Config: config\sites\enx\config.json
+============================================================
+[START] Crawler initializing...
+[CONFIG] Base URL: https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml
+[STEP 1] Starting browser...
+[BROWSER] Creating firefox options...
+[BROWSER] Setting download directory: C:\fcn\Projects\Python.UI.Scripting\output\enx\downloads
+[BROWSER] Resolving geckodriver...
+[BROWSER] Using local geckodriver: C:\fcn\Projects\Python.UI.Scripting\geckodriver.exe
+[BROWSER] firefox started successfully!
+[STEP 2] Navigating to base URL...
+[STEP 2] Navigation success on attempt 1/2
+[STEP 3] Executing login...
+[INFO] Login is disabled by config.
+[STEP 4] Running 1 task(s) after login...
+[TASK 1] enx-tracking started
+[TASK 1] navigation steps: 6
+[STEPS] Total steps to perform: 6
+[STEP 1] action=sleep, by=, selector=
+[STEP] Sleeping 10.0s
+[STEP 1] action=sleep done
+[STEP 2] action=select, by=id, selector=enxSptrctrc010:trackingItems
+[STEP 2] action=select done
+[STEP 3] action=type, by=name, selector=enxSptrctrc010:j_idt24
+[STEP] type input value: HAMDLA73631
+[STEP 3] action=type done
+[STEP 4] action=click, by=id, selector=enxSptrctrc010:searchButton
+[ACTION] click success via ActionChains: by=id, selector=enxSptrctrc010:searchButton
+[STEP 4] action=click done
+[STEP 5] action=wait, by=xpath, selector=//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='ACTUAL TIME OF DEPARTURE']
+[STEP 5] action=wait done
+[STEP 6] action=sleep, by=, selector=
+[STEP] Sleeping 5.0s
+[STEP 6] action=sleep done
+[SCRAPE] List scraping config: list_selector=.sea_slider .box, fields=3, global_fields=2
+[INFO] Page 1, found 4 items
+[INFO] Scrape done, total records: 4
+[OUTPUT] Saving records: format=json
+[OUTPUT] Data source=records, count=4, path=output\enx\enx_tracking_20260602_095713.json
+[INFO] Saved 4 records to output\enx\enx_tracking_20260602_095713.json
+[TASK 1] enx-tracking completed, records=4 (popup_records=0, list_records=4)
+[TASK] All tasks finished, total aggregated records=4
+[SUCCESS] Crawler completed!
+[BROWSER] Closing browser session...
+[DONE] Crawl finished. Records: 4

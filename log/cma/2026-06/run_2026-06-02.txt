@@ -1,0 +1,230 @@
+[LOG] Writing runtime logs to: C:\fcn\Projects\Python.UI.Scripting\log\cma\2026-06\run_2026-06-02.txt
+[LOG] Retention days: 30
+[LOG] Site scope: cma
+[PARAMS] Runtime params: ['ContainerNo']
+
+============================================================
+[TASK] Config: config\sites\cma\config.json
+============================================================
+[START] Crawler initializing...
+[CONFIG] Base URL: https://www.cma-cgm.com/
+[STEP 1] Starting browser...
+[BROWSER] Creating edge options...
+[BROWSER] Setting download directory: C:\fcn\Projects\Python.UI.Scripting\output\cma\downloads
+[BROWSER] Edge direct mode using user data dir: C:/fcn/MyEdgeData
+[BROWSER] Resolving msedgedriver...
+[BROWSER] Using local msedgedriver: C:\fcn\Projects\Python.UI.Scripting\msedgedriver.exe
+[BROWSER] CDP stealth script installed.
+[BROWSER] edge started successfully!
+[STEP 2] Startup navigation skipped by config.
+[STEP 3] Executing login...
+[INFO] Login is disabled by config.
+[STEP 4] Running 1 task(s) after login...
+[TASK 1] cma-tracking started
+[TASK 1] navigation steps: 8
+[STEPS] Total steps to perform: 8
+[STEP 1] action=goto, by=, selector=
+[WAIT] visible timeout: by=css, selector=#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container'], timeout=20s
+[WAIT] URL=https://www.cma-cgm.com/ebusiness/tracking/search
+[STEP] goto verify failed on attempt 1/3: TimeoutException: Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+. Retrying...
+[WAIT] visible timeout: by=css, selector=#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container'], timeout=20s
+[WAIT] URL=https://www.cma-cgm.com/ebusiness/tracking/search
+[STEP] goto verify failed on attempt 2/3: TimeoutException: Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+. Retrying...
+[WAIT] visible timeout: by=css, selector=#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container'], timeout=20s
+[WAIT] URL=https://www.cma-cgm.com/ebusiness/tracking/search
+[ERROR] Action failed: action=goto, by=None, selector=None, url=https://www.cma-cgm.com/ebusiness/tracking/search
+[ERROR] Step 1 failed: action=goto, err=TimeoutException: Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+
+[ERROR] Step context URL: https://www.cma-cgm.com/ebusiness/tracking/search
+[ERROR] Task 'cma-tracking' failed: TimeoutException: Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+
+[ERROR] URL when task failed: https://www.cma-cgm.com/ebusiness/tracking/search
+[ERROR] Run failed: TimeoutException: Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+
+[ERROR] Task=cma-tracking, URL=https://www.cma-cgm.com/ebusiness/tracking/search
+[BROWSER] Closing browser session...
+[ERROR] Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+
+Traceback (most recent call last):
+  File "C:\fcn\Projects\Python.UI.Scripting\src\main.py", line 123, in run_config
+    records = crawler.run()
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 88, in run
+    records = self._run_tasks(tasks)
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 130, in _run_tasks
+    self._perform_steps(nav_steps)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 1457, in _perform_steps
+    self._do_action(step)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 1616, in _do_action
+    self._wait_visible(verify_by, verify_selector, timeout=verify_timeout)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 2181, in _wait_visible
+    raise e
+  File "C:\fcn\Projects\Python.UI.Scripting\src\workflow\base_workflow.py", line 2175, in _wait_visible
+    return WebDriverWait(self.driver, timeout).until(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        EC.visibility_of_element_located((self._to_by(by), selector))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\CFU6SZH\AppData\Local\Programs\Python\Python313\Lib\site-packages\selenium\webdriver\support\wait.py", line 146, in until
+    raise TimeoutException(message, screen, stacktrace)
+selenium.common.exceptions.TimeoutException: Message: 
+Stacktrace:
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe305+e0f5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28fe364+e154]
+	msedgedriver!GetHandleVerifier [0x7ff7b2c78c2a+388a1a]
+	msedgedriver!(No symbol) [0x7ff7b2673e3c]
+	msedgedriver!(No symbol) [0x7ff7b26740a5]
+	msedgedriver!(No symbol) [0x7ff7b26b1357]
+	msedgedriver!(No symbol) [0x7ff7b266aaa7]
+	msedgedriver!(No symbol) [0x7ff7b26af0b2]
+	msedgedriver!(No symbol) [0x7ff7b266a2ec]
+	msedgedriver!(No symbol) [0x7ff7b2669546]
+	msedgedriver!(No symbol) [0x7ff7b266a113]
+	msedgedriver!(No symbol) [0x7ff7b2732519]
+	msedgedriver!(No symbol) [0x7ff7b272ec93]
+	msedgedriver!(No symbol) [0x7ff7b273f182]
+	msedgedriver!GetHandleVerifier [0x7ff7b291aad8+2a8c8]
+	msedgedriver!GetHandleVerifier [0x7ff7b2923366+33156]
+	msedgedriver!GetHandleVerifier [0x7ff7b2905794+15584]
+	msedgedriver!GetHandleVerifier [0x7ff7b29058b5+156a5]
+	msedgedriver!GetHandleVerifier [0x7ff7b28f2bd3+29c3]
+	KERNEL32!BaseThreadInitThunk [0x7ffd3f15e957+17]
+	ntdll!RtlUserThreadStart [0x7ffd405e427c+2c]
+

@@ -179,6 +179,8 @@ class WorkflowCrawler:
                 edge_user_data_dir = str(
                     edge_cfg.get("user_data_dir", self.config.get("edge_user_data_dir", ""))
                 ).strip()
+                if edge_user_data_dir:
+                    edge_user_data_dir = os.path.expanduser(os.path.expandvars(edge_user_data_dir))
                 edge_extra_args = edge_cfg.get("extra_args", [])
                 if not isinstance(edge_extra_args, list):
                     edge_extra_args = []
@@ -189,7 +191,8 @@ class WorkflowCrawler:
                     options.add_argument("--start-maximized")
 
                 # Keep direct-launch behavior closer to a regular user browser profile.
-                if edge_stealth_mode:
+                # In attach mode, some experimental options are rejected by msedgedriver.
+                if edge_stealth_mode and not attach_existing:
                     options.add_argument("--disable-blink-features=AutomationControlled")
                     options.add_argument("--disable-infobars")
                     options.add_argument("--disable-notifications")

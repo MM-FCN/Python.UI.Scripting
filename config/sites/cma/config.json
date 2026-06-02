@@ -22,7 +22,7 @@
   "keep_browser_open": false,
   "edge": {
     "stealth_mode": true,
-    "user_data_dir": "C:/fcn/MyEdgeDataCmaDirect",
+    "user_data_dir": "C:/fcn/MyEdgeData",
     "attach_existing": false,
     "debugger_address": "127.0.0.1:9222"
   },

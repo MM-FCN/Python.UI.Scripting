@@ -17,7 +17,7 @@
   "keep_browser_open": true,
   "edge": {
     "stealth_mode": true,
-    "user_data_dir": "C:/fcn/MyEdgeDataHapagDirect",
+    "user_data_dir": "%LOCALAPPDATA%/Microsoft/Edge/User Data",
     "attach_existing": false,
     "debugger_address": "127.0.0.1:9222"
   },

@@ -1,0 +1,123 @@
+[LOG] Writing runtime logs to: C:\fcn\Projects\Python.UI.Scripting\log\cargonavi\2026-06\run_2026-06-02.txt
+[LOG] Retention days: 30
+[LOG] Site scope: cargonavi
+[PARAMS] Runtime params: ['MAWB']
+
+============================================================
+[TASK] Config: config\sites\cargonavi\config.json
+============================================================
+[START] Crawler initializing...
+[CONFIG] Base URL: https://cargonavi.com/
+[STEP 1] Starting browser...
+[BROWSER] Creating firefox options...
+[BROWSER] Setting download directory: C:\fcn\Projects\Python.UI.Scripting\output\downloads
+[BROWSER] Resolving geckodriver...
+[BROWSER] Using local geckodriver: C:\fcn\Projects\Python.UI.Scripting\geckodriver.exe
+[BROWSER] Window maximized.
+[BROWSER] firefox started successfully!
+[STEP 2] Navigating to base URL...
+[STEP 2] Navigation success on attempt 1/2
+[STEP 3] Executing login...
+[INFO] Login is disabled by config.
+[STEP 4] Running 1 task(s) after login...
+[TASK 1] air_transport_information started
+[TASK 1] navigation steps: 8
+[STEPS] Total steps to perform: 8
+[STEP 1] action=switch_to_frame, by=name, selector=showpage
+[STEP] Switched to frame by name: showpage
+[STEP 1] action=switch_to_frame done
+[STEP 2] action=type, by=css, selector=input[name='MAWB']
+[STEP] type input value: 217-08282315
+[STEP 2] action=type done
+[STEP 3] action=click, by=css, selector=input[type='submit'][value='Track']
+[ACTION] click success via ActionChains: by=css, selector=input[type='submit'][value='Track']
+[STEP] click post-verify passed: by=css, selector=input[type='submit'][value='Track']
+[STEP 3] action=click done
+[STEP 4] action=sleep, by=, selector=
+[STEP] Sleeping 5.0s
+[STEP 4] action=sleep done
+[STEP 5] action=switch_to_new_tab, by=, selector=
+[STEP] Switched to tab by url_contains: https://chorus.thaicargo.com/skychain/app
+[STEP 5] action=switch_to_new_tab done
+[STEP 6] action=wait, by=css, selector=tr[id^='trackShiptable1rowInner'] table.grdTable
+[STEP 6] action=wait done
+[STEP 7] action=sleep, by=, selector=
+[STEP] Sleeping 3.0s
+[STEP 7] action=sleep done
+[STEP 8] action=scrape_popup, by=, selector=
+[SCRAPE] popup mode: table=True, popup_fields=0
+[SCRAPE] Waiting rows stable: selector=tr[id^='trackShiptable1rowInner'] table.grdTable tbody tr.grdRow, timeout=60s, stable_checks=3, poll=0.4s
+[SCRAPE] Rows stabilized at 11 rows
+[SCRAPE] Popup table rows found: 11
+[SCRAPE] Popup rows parsed: kept=11, skipped_required=0
+[STEP 8] action=scrape_popup done
+[SCRAPE] Popup table mode handled by scrape_popup step, skip list scraping
+[OUTPUT] Saving records: format=json
+[OUTPUT] Data source=popup_data, count=11, path=output\cargonavi\Track_shipment_20260602_093601.json
+[INFO] Saved 11 records to output\cargonavi\Track_shipment_20260602_093601.json
+[TASK 1] air_transport_information completed, records=11 (popup_records=11, list_records=0)
+[TASK] All tasks finished, total aggregated records=11
+[SUCCESS] Crawler completed!
+[BROWSER] Closing browser session...
+[DONE] Crawl finished. Records: 11
+[LOG] Writing runtime logs to: C:\fcn\Projects\Python.UI.Scripting\log\cargonavi\2026-06\run_2026-06-02.txt
+[LOG] Retention days: 30
+[LOG] Site scope: cargonavi
+[PARAMS] Runtime params: ['MAWB']
+
+============================================================
+[TASK] Config: config\sites\cargonavi\config.json
+============================================================
+[START] Crawler initializing...
+[CONFIG] Base URL: https://cargonavi.com/
+[STEP 1] Starting browser...
+[BROWSER] Creating firefox options...
+[BROWSER] Setting download directory: C:\fcn\Projects\Python.UI.Scripting\output\downloads
+[BROWSER] Resolving geckodriver...
+[BROWSER] Using local geckodriver: C:\fcn\Projects\Python.UI.Scripting\geckodriver.exe
+[BROWSER] firefox started successfully!
+[STEP 2] Navigating to base URL...
+[STEP 2] Navigation success on attempt 1/2
+[STEP 3] Executing login...
+[INFO] Login is disabled by config.
+[STEP 4] Running 1 task(s) after login...
+[TASK 1] air_transport_information started
+[TASK 1] navigation steps: 8
+[STEPS] Total steps to perform: 8
+[STEP 1] action=switch_to_frame, by=name, selector=showpage
+[STEP] Switched to frame by name: showpage
+[STEP 1] action=switch_to_frame done
+[STEP 2] action=type, by=css, selector=input[name='MAWB']
+[STEP] type input value: 217-08282315
+[STEP 2] action=type done
+[STEP 3] action=click, by=css, selector=input[type='submit'][value='Track']
+[ACTION] click success via ActionChains: by=css, selector=input[type='submit'][value='Track']
+[STEP] click post-verify passed: by=css, selector=input[type='submit'][value='Track']
+[STEP 3] action=click done
+[STEP 4] action=sleep, by=, selector=
+[STEP] Sleeping 5.0s
+[STEP 4] action=sleep done
+[STEP 5] action=switch_to_new_tab, by=, selector=
+[STEP] Switched to tab by url_contains: https://chorus.thaicargo.com/skychain/app
+[STEP 5] action=switch_to_new_tab done
+[STEP 6] action=wait, by=css, selector=tr[id^='trackShiptable1rowInner'] table.grdTable
+[STEP 6] action=wait done
+[STEP 7] action=sleep, by=, selector=
+[STEP] Sleeping 3.0s
+[STEP 7] action=sleep done
+[STEP 8] action=scrape_popup, by=, selector=
+[SCRAPE] popup mode: table=True, popup_fields=0
+[SCRAPE] Waiting rows stable: selector=tr[id^='trackShiptable1rowInner'] table.grdTable tbody tr.grdRow, timeout=60s, stable_checks=3, poll=0.4s
+[SCRAPE] Rows stabilized at 11 rows
+[SCRAPE] Popup table rows found: 11
+[SCRAPE] Popup rows parsed: kept=11, skipped_required=0
+[STEP 8] action=scrape_popup done
+[SCRAPE] Popup table mode handled by scrape_popup step, skip list scraping
+[OUTPUT] Saving records: format=json
+[OUTPUT] Data source=popup_data, count=11, path=output\cargonavi\Track_shipment_20260602_093646.json
+[INFO] Saved 11 records to output\cargonavi\Track_shipment_20260602_093646.json
+[TASK 1] air_transport_information completed, records=11 (popup_records=11, list_records=0)
+[TASK] All tasks finished, total aggregated records=11
+[SUCCESS] Crawler completed!
+[BROWSER] Closing browser session...
+[DONE] Crawl finished. Records: 11
