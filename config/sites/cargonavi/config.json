@@ -60,6 +60,9 @@
           "post_click_allow_same_tab": false,
           "verify_timeout": 20,
           "retry_on_verify_fail": 1,
+          "retry_frame_by": "name",
+          "retry_frame_selector": "showpage",
+          "retry_close_extra_tabs": true,
           "comment": "点击Track按钮"
         },
         {

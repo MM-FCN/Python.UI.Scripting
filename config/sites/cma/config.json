@@ -12,6 +12,11 @@
     "edge.attach_existing": "true=接管已手动打开的 Edge；false=由脚本新开浏览器。",
     "edge.debugger_address": "Edge 远程调试地址，默认 127.0.0.1:9222。",
     "edge.stealth_mode": "直启模式下是否启用低指纹启动参数（默认 true）。",
+    "edge.headless_stealth_enabled": "headless 模式是否启用额外反检测覆盖（UA/语言/平台/时区）。",
+    "edge.accept_language": "浏览器语言头与前端语言特征，建议与真实环境一致。",
+    "edge.platform": "前端 platform 指纹，Windows 通常为 Win32。",
+    "edge.timezone": "可选，时区覆写（如 Asia/Shanghai）。",
+    "edge.user_agent": "可选，手动指定 UA；留空时自动去除 Headless 标记。",
     "edge.user_data_dir": "直启模式可复用的 Edge 用户数据目录（可降低新环境风险）。",
     "edge.extra_args": "直启模式追加启动参数数组（可选）。"
   },
@@ -22,6 +27,11 @@
   "keep_browser_open": false,
   "edge": {
     "stealth_mode": true,
+    "headless_stealth_enabled": true,
+    "accept_language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "platform": "Win32",
+    "timezone": "Asia/Shanghai",
+    "user_agent": "",
     "user_data_dir": "C:/fcn/MyEdgeData",
     "attach_existing": false,
     "debugger_address": "127.0.0.1:9222"

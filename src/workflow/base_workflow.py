@@ -163,7 +163,7 @@ class WorkflowCrawler:
                 records = self._scrape_records()
                 self._save_records(records)
 
-                task_records = self.popup_data if self.popup_data else records
+                task_records = self.popup_data if self.popup_data else recordmerge 
                 all_records.extend(task_records)
                 print(
                     f"[TASK {idx}] {task_name} completed, records={len(task_records)} "
@@ -203,6 +203,10 @@ class WorkflowCrawler:
                 if not isinstance(edge_cfg, dict):
                     edge_cfg = {}
                 edge_stealth_mode = bool(edge_cfg.get("stealth_mode", True))
+                edge_headless_stealth = bool(edge_cfg.get("headless_stealth_enabled", True))
+                edge_accept_language = str(
+                    edge_cfg.get("accept_language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+                ).strip()
                 attach_existing = bool(
                     edge_cfg.get("attach_existing", self.config.get("edge_attach_existing", False))
                 )
@@ -217,6 +221,9 @@ class WorkflowCrawler:
                 if self.headless:
                     options.add_argument("--headless=new")
                     options.add_argument("--window-size=1600,1000")
+                    options.add_argument("--window-position=0,0")
+                    options.add_argument("--force-device-scale-factor=1")
+                    options.add_argument("--hide-scrollbars")
                 else:
                     options.add_argument("--start-maximized")
                 options.add_argument("--no-sandbox")
@@ -250,6 +257,7 @@ class WorkflowCrawler:
                     "safebrowsing.enabled": True,
                     "credentials_enable_service": False,
                     "profile.password_manager_enabled": False,
+                    "intl.accept_languages": edge_accept_language,
                 })
                 self._attached_existing_browser = False
                 self.driver = self._create_remote_driver(remote_url, options)
@@ -315,13 +323,16 @@ class WorkflowCrawler:
         if not self.driver:
             return
         script = """
+            // webdriver
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined,
                 configurable: true
             });
 
+            // chromium runtime
             window.chrome = window.chrome || { runtime: {} };
 
+            // plugins
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [
                     { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
@@ -331,10 +342,53 @@ class WorkflowCrawler:
                 configurable: true
             });
 
+            // languages
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['zh-CN', 'en-US', 'ja-JP'],
                 configurable: true
             });
+
+            // common fingerprint fields
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'Win32',
+                configurable: true
+            });
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 8,
+                configurable: true
+            });
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8,
+                configurable: true
+            });
+            Object.defineProperty(navigator, 'maxTouchPoints', {
+                get: () => 0,
+                configurable: true
+            });
+
+            // permissions API patch used by many bot checks
+            const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+            if (originalQuery) {
+                window.navigator.permissions.query = (parameters) => (
+                    parameters && parameters.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : originalQuery(parameters)
+                );
+            }
+
+            // avoid obvious headless geometry mismatch
+            if (window.outerWidth === 0) {
+                Object.defineProperty(window, 'outerWidth', {
+                    get: () => window.innerWidth,
+                    configurable: true
+                });
+            }
+            if (window.outerHeight === 0) {
+                Object.defineProperty(window, 'outerHeight', {
+                    get: () => window.innerHeight + 80,
+                    configurable: true
+                });
+            }
         """
         try:
             self.driver.execute_cdp_cmd(
@@ -344,6 +398,47 @@ class WorkflowCrawler:
             print("[BROWSER] CDP stealth script installed.")
         except Exception as e:
             print(f"[BROWSER] CDP stealth install skipped: {type(e).__name__}: {e}")
+
+    def _apply_edge_headless_overrides(self, edge_cfg: Dict[str, Any]) -> None:
+        """Apply runtime overrides to make Edge headless fingerprint closer to normal desktop browsing."""
+        if not self.driver:
+            return
+
+        accept_language = str(
+            edge_cfg.get("accept_language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+        ).strip()
+        platform = str(edge_cfg.get("platform", "Win32")).strip() or "Win32"
+        timezone = str(edge_cfg.get("timezone", "")).strip()
+        ua_override = str(edge_cfg.get("user_agent", "")).strip()
+
+        try:
+            current_ua = str(self.driver.execute_script("return navigator.userAgent") or "")
+        except Exception:
+            current_ua = ""
+
+        if not ua_override:
+            ua_override = current_ua.replace("HeadlessChrome", "Chrome")
+
+        try:
+            self.driver.execute_cdp_cmd("Network.enable", {})
+            self.driver.execute_cdp_cmd(
+                "Network.setUserAgentOverride",
+                {
+                    "userAgent": ua_override,
+                    "acceptLanguage": accept_language,
+                    "platform": platform,
+                },
+            )
+            print("[BROWSER] Edge headless UA/language/platform override applied.")
+        except Exception as e:
+            print(f"[BROWSER] Edge headless UA override skipped: {type(e).__name__}: {e}")
+
+        if timezone:
+            try:
+                self.driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": timezone})
+                print(f"[BROWSER] Edge headless timezone override applied: {timezone}")
+            except Exception as e:
+                print(f"[BROWSER] Edge headless timezone override skipped: {type(e).__name__}: {e}")
 
     def _override_navigator_webdriver(self) -> None:
         """Inject JS to override automation-related globals on current document."""
@@ -1396,19 +1491,23 @@ class WorkflowCrawler:
         captcha_cfg = self.config.get("login", {}).get("captcha", {})
         auto_check_captcha = bool(captcha_cfg.get("auto_check_during_steps", False)) if isinstance(captcha_cfg, dict) else False
         for i, step in enumerate(steps, start=1):
+            next_step = steps[i] if i < len(steps) else None
+            runtime_step = dict(step)
             # 动态替换所有 {{param}} 变量
-            if "value" in step and isinstance(step["value"], str):
+            if "value" in runtime_step and isinstance(runtime_step["value"], str):
                 for k, v in self.params.items():
-                    step["value"] = step["value"].replace(f"{{{{{k}}}}}", v)
-            action = step.get("action")
-            by = step.get("by", "")
-            selector = step.get("selector", "")
+                    runtime_step["value"] = runtime_step["value"].replace(f"{{{{{k}}}}}", v)
+            action = runtime_step.get("action")
+            by = runtime_step.get("by", "")
+            selector = runtime_step.get("selector", "")
             print(f"[STEP {i}] action={action}, by={by}, selector={selector}")
             try:
                 self._ensure_browser_context(context=f"before step {i} ({action})")
                 if auto_check_captcha:
                     self._handle_captcha_if_exists(captcha_cfg, context=f"before step {i} ({action})")
-                self._do_action(step)
+                if isinstance(next_step, dict):
+                    runtime_step["_next_step"] = next_step
+                self._do_action(runtime_step)
                 print(f"[STEP {i}] action={action} done")
             except Exception as e:
                 print(f"[ERROR] Step {i} failed: action={action}, err={type(e).__name__}: {e}")
@@ -1494,26 +1593,80 @@ class WorkflowCrawler:
                 by = self._to_by(step["by"])
                 selector = step["selector"]
                 timeout = float(step.get("timeout", 0))
-                end_time = time.time() + max(0.0, timeout)
+                max_rounds = max(1, int(step.get("max_rounds", 1)))
+                check_next_on_timeout = bool(step.get("check_next_on_timeout", False))
+                next_check_timeout = float(step.get("next_check_timeout", 1.5))
                 clicked = False
 
-                while True:
-                    elements = self.driver.find_elements(by, selector)
-                    for el in elements:
-                        try:
-                            if el.is_displayed() and el.is_enabled():
-                                self.driver.execute_script("arguments[0].click();", el)
-                                print(f"[STEP] click_if_exists clicked: {selector}")
-                                clicked = True
-                                break
-                        except Exception:
-                            continue
+                for round_idx in range(1, max_rounds + 1):
+                    end_time = time.time() + max(0.0, timeout)
+                    while True:
+                        elements = self.driver.find_elements(by, selector)
+                        for el in elements:
+                            try:
+                                # Some transient overlays/buttons are visible but not strictly "enabled".
+                                # Prefer normal click, then fall back to JS click to improve robustness.
+                                if el.is_displayed():
+                                    try:
+                                        self.driver.execute_script(
+                                            "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+                                            el,
+                                        )
+                                    except Exception:
+                                        pass
+
+                                    try:
+                                        ActionChains(self.driver).move_to_element(el).pause(0.05).click(el).perform()
+                                    except Exception:
+                                        self.driver.execute_script("arguments[0].click();", el)
+
+                                    print(f"[STEP] click_if_exists clicked: {selector}")
+                                    clicked = True
+                                    break
+                            except Exception:
+                                continue
+
+                        if clicked:
+                            break
+                        if time.time() >= end_time:
+                            break
+                        time.sleep(0.25)
 
                     if clicked:
                         break
-                    if time.time() >= end_time:
+
+                    if not check_next_on_timeout:
                         break
-                    time.sleep(0.25)
+
+                    next_by = step.get("next_by")
+                    next_selector = step.get("next_selector")
+                    if not next_by or not next_selector:
+                        next_step = step.get("_next_step")
+                        if isinstance(next_step, dict):
+                            next_by = next_step.get("by")
+                            next_selector = next_step.get("selector")
+
+                    if next_by and next_selector:
+                        try:
+                            self._wait_visible(str(next_by), str(next_selector), timeout=next_check_timeout)
+                            print(
+                                f"[STEP] click_if_exists timeout round {round_idx}/{max_rounds}; "
+                                "next step element is already visible, continue"
+                            )
+                            break
+                        except Exception:
+                            if round_idx < max_rounds:
+                                print(
+                                    f"[STEP] click_if_exists timeout round {round_idx}/{max_rounds}; "
+                                    "next step not ready, retrying"
+                                )
+                            continue
+
+                    if round_idx < max_rounds:
+                        print(
+                            f"[STEP] click_if_exists timeout round {round_idx}/{max_rounds}; "
+                            "no next-step check target, retrying"
+                        )
 
                 if not clicked:
                     print(f"[STEP] click_if_exists no clickable element for: {selector}")
@@ -1637,6 +1790,58 @@ class WorkflowCrawler:
         allow_same_tab = bool(step.get("post_click_allow_same_tab", True))
         verify_timeout = int(step.get("verify_timeout", timeout or self.default_timeout))
         retry_on_verify_fail = int(step.get("retry_on_verify_fail", 0))
+        retry_frame_by = str(step.get("retry_frame_by", "")).strip().lower()
+        retry_frame_selector = str(step.get("retry_frame_selector", "")).strip()
+        retry_close_extra_tabs = bool(step.get("retry_close_extra_tabs", True))
+
+        def _restore_retry_context(base_handle: Optional[str]) -> None:
+            if not self.driver:
+                return
+
+            if retry_close_extra_tabs:
+                try:
+                    handles = list(self.driver.window_handles)
+                    if base_handle and base_handle in handles:
+                        for h in handles:
+                            if h == base_handle:
+                                continue
+                            try:
+                                self.driver.switch_to.window(h)
+                                self.driver.close()
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+
+            try:
+                if base_handle:
+                    self.driver.switch_to.window(base_handle)
+            except Exception:
+                pass
+
+            if retry_frame_by and retry_frame_selector:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
+                try:
+                    if retry_frame_by == "name":
+                        self.driver.switch_to.frame(retry_frame_selector)
+                    elif retry_frame_by == "id":
+                        self.driver.switch_to.frame(self.driver.find_element(By.ID, retry_frame_selector))
+                    elif retry_frame_by == "css":
+                        self.driver.switch_to.frame(self.driver.find_element(By.CSS_SELECTOR, retry_frame_selector))
+                    elif retry_frame_by == "xpath":
+                        self.driver.switch_to.frame(self.driver.find_element(By.XPATH, retry_frame_selector))
+                    print(
+                        f"[STEP] click retry context restored to frame: "
+                        f"by={retry_frame_by}, selector={retry_frame_selector}"
+                    )
+                except Exception as e:
+                    print(
+                        f"[WARN] click retry frame restore failed: "
+                        f"by={retry_frame_by}, selector={retry_frame_selector}, err={type(e).__name__}: {e}"
+                    )
 
         # If no post-click checks are configured, keep the original click behavior.
         if not expect_new_tab and not target_url_contains:
@@ -1647,6 +1852,10 @@ class WorkflowCrawler:
         for attempt in range(1, attempts + 1):
             base_handles = set(self._get_window_handles_with_retry(retries=2, delay=0.2))
             base_url = self._safe_current_url()
+            try:
+                base_handle = self.driver.current_window_handle
+            except Exception:
+                base_handle = None
 
             self._click(by, selector, timeout=timeout)
             verified = self._wait_click_effect(
@@ -1662,6 +1871,7 @@ class WorkflowCrawler:
                 return
 
             if attempt < attempts:
+                _restore_retry_context(base_handle)
                 print(f"[WARN] click post-verify failed (attempt {attempt}/{attempts}), retrying click...")
 
         raise TimeoutException(
@@ -2197,7 +2407,17 @@ class WorkflowCrawler:
         actions = ActionChains(self.driver)
         actions.move_to_element(element).click().perform()
         if clear_first:
-            element.clear()
+            try:
+                # For token/chip inputs, clear() alone may not remove existing chips.
+                element.send_keys(Keys.CONTROL, "a")
+                element.send_keys(Keys.BACKSPACE)
+                element.send_keys(Keys.DELETE)
+            except Exception:
+                pass
+            try:
+                element.clear()
+            except Exception:
+                pass
         element.send_keys(text)
 
         actual = (element.get_attribute("value") or "")
