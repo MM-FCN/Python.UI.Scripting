@@ -1,4 +1,5 @@
 {
+  "browser": "edge",
   "base_url": "https://cargonavi.com/",
   "default_timeout": 15,
   "download_dir": "output/downloads",

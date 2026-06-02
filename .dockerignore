@@ -14,3 +14,8 @@ input_done
 *.ipynb
 geckodriver.exe
 msedgedriver.exe
+openspec
+.github
+scripts
+README.md
+run_*.bat
