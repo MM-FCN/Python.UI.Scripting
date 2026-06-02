@@ -132,6 +132,118 @@ def run_config(
         return False, []
 
 
+def run_config_batch_reuse_session(
+    config_path: str,
+    headless: bool,
+    params_list: list[dict[str, str]],
+    base_url_override: Optional[str] = None,
+) -> tuple[bool, list[dict[str, Any]]]:
+    print(f"\n{'='*60}")
+    print(f"[TASK] Config (batch reuse): {config_path}")
+    print(f"[TASK] Batch jobs: {len(params_list)}")
+    print(f"{'='*60}")
+    try:
+        config = load_config(config_path)
+        if base_url_override:
+            config["base_url"] = base_url_override
+            print(f"[TASK] Override base_url by input URI: {base_url_override}")
+
+        crawler = create_workflow_crawler(config=config, headless=headless, params={})
+
+        print("[BATCH] Starting shared browser session...")
+        crawler._start_browser()
+        try:
+            startup_navigate = bool(crawler.config.get("startup_navigate", True))
+            if startup_navigate:
+                print("[BATCH] Initial navigation to base URL...")
+                crawler._navigate_to_base_url()
+            else:
+                print("[BATCH] Startup navigation skipped by config.")
+
+            print("[BATCH] Executing login once for shared session...")
+            crawler._login()
+
+            main_handle = None
+            try:
+                handles = crawler.driver.window_handles if crawler.driver else []
+                if handles:
+                    main_handle = handles[0]
+            except Exception:
+                main_handle = None
+
+            tasks = crawler.config.get("tasks")
+            job_results: list[dict[str, Any]] = []
+            for idx, one_params in enumerate(params_list, start=1):
+                if idx > 1 and crawler.driver:
+                    # Reuse one browser session but reset to the main tab between jobs.
+                    try:
+                        handles = list(crawler.driver.window_handles)
+                    except Exception:
+                        handles = []
+
+                    if not main_handle and handles:
+                        main_handle = handles[0]
+
+                    if main_handle and handles:
+                        for h in list(handles):
+                            if h == main_handle:
+                                continue
+                            try:
+                                crawler.driver.switch_to.window(h)
+                                crawler.driver.close()
+                                print(f"[BATCH] Closed extra tab before job {idx}: {h}")
+                            except Exception:
+                                continue
+
+                        try:
+                            crawler.driver.switch_to.window(main_handle)
+                            print(f"[BATCH] Switched back to main tab before job {idx}")
+                        except Exception:
+                            # If main handle became invalid, fallback to first remaining handle.
+                            try:
+                                fallback_handles = list(crawler.driver.window_handles)
+                                if fallback_handles:
+                                    crawler.driver.switch_to.window(fallback_handles[0])
+                                    main_handle = fallback_handles[0]
+                                    print(f"[BATCH] Main tab handle refreshed before job {idx}")
+                            except Exception:
+                                pass
+
+                crawler.params = dict(one_params or {})
+                print(
+                    f"[BATCH] Job {idx}/{len(params_list)} start, "
+                    f"params={sorted(crawler.params.keys())}"
+                )
+                if tasks:
+                    records = crawler._run_tasks(tasks)
+                else:
+                    crawler.popup_data = []
+                    crawler._perform_steps(crawler.config.get("navigation_steps", []))
+                    records = crawler._scrape_records()
+                    crawler._save_records(records)
+
+                print(f"[BATCH] Job {idx}/{len(params_list)} done. Records: {len(records)}")
+                job_results.append({"params": dict(crawler.params), "records": records})
+
+            print("[BATCH] Shared-session batch completed.")
+            return True, job_results
+        finally:
+            if crawler.driver:
+                keep_open = bool(crawler.config.get("keep_browser_open", getattr(crawler, "_attached_existing_browser", False)))
+                if keep_open:
+                    print("[BATCH] keep_browser_open=true, leaving browser/session open.")
+                else:
+                    print("[BATCH] Closing shared browser session...")
+                    crawler.driver.quit()
+    except ConfigError as e:
+        print(f"[CONFIG ERROR] {e}")
+        return False, []
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        traceback.print_exc()
+        return False, []
+
+
 def _push_records_to_uri(
     *,
     uri: str,
@@ -139,6 +251,7 @@ def _push_records_to_uri(
     input_file_name: str,
     params: dict[str, str],
     records: list[dict[str, Any]],
+    job_results: Optional[list[dict[str, Any]]] = None,
     timeout_seconds: int,
     retries: int,
     verify_ssl: bool,
@@ -149,20 +262,40 @@ def _push_records_to_uri(
 
     # Tag each record with request identifiers so batch inputs can be disambiguated downstream.
     request_keys = ("ContainerNo", "MAWB", "HAWNO")
+
+    def _tag_rows(source_records: list[dict[str, Any]], source_params: dict[str, str]) -> list[dict[str, Any]]:
+        tagged: list[dict[str, Any]] = []
+        for item in source_records:
+            row = dict(item) if isinstance(item, dict) else {"value": item}
+            for key in request_keys:
+                value = source_params.get(key)
+                if value and key not in row:
+                    row[key] = value
+            tagged.append(row)
+        return tagged
+
     tagged_records: list[dict[str, Any]] = []
-    for item in records:
-        row = dict(item) if isinstance(item, dict) else {"value": item}
-        for key in request_keys:
-            value = params.get(key)
-            if value and key not in row:
-                row[key] = value
-        tagged_records.append(row)
+    params_list: list[dict[str, str]] = []
+    if job_results:
+        for job in job_results:
+            job_params = job.get("params", {})
+            if not isinstance(job_params, dict):
+                job_params = {}
+            job_records = job.get("records", [])
+            if not isinstance(job_records, list):
+                job_records = []
+            params_list.append(dict(job_params))
+            tagged_records.extend(_tag_rows(job_records, job_params))
+    else:
+        tagged_records = _tag_rows(records, params)
 
     payload = {
         "site": site_name,
         "input_file": input_file_name,
         "record_count": len(tagged_records),
         "params": params,
+        "params_list": params_list,
+        "job_count": len(job_results or []),
         "records": tagged_records,
         "pushed_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -178,19 +311,20 @@ def _push_records_to_uri(
             if 200 <= response.status_code < 300:
                 print(
                     f"[PUSH] Success: {target}, status={response.status_code}, "
-                    f"records={len(tagged_records)}, attempt={attempt}/{max_attempts}"
+                    f"records={len(tagged_records)}, jobs={len(job_results or []) or 1}, "
+                    f"attempt={attempt}/{max_attempts}"
                 )
                 return True
 
             body = (response.text or "").strip().replace("\n", " ")
             print(
                 f"[PUSH] Failed: {target}, status={response.status_code}, "
-                f"attempt={attempt}/{max_attempts}, response={body[:300]}"
+                f"jobs={len(job_results or []) or 1}, attempt={attempt}/{max_attempts}, response={body[:300]}"
             )
         except Exception as e:
             print(
                 f"[PUSH] Exception while pushing to {target}, "
-                f"attempt={attempt}/{max_attempts}: {type(e).__name__}: {e}"
+                f"jobs={len(job_results or []) or 1}, attempt={attempt}/{max_attempts}: {type(e).__name__}: {e}"
             )
 
         if attempt < max_attempts:
@@ -486,37 +620,62 @@ def _run_input_timer_mode(
                     job_params_list.append(runtime_params)
 
                 success = True
-                for idx, job_params in enumerate(job_params_list, start=1):
+                push_jobs: list[dict[str, Any]] = []
+                if batch and len(job_params_list) > 1:
                     print(
-                        f"[WATCH] Trigger crawl: site={site_name}, file={file_path.name}, "
-                        f"job={idx}/{len(job_params_list)}, params={sorted(job_params.keys())}, "
-                        f"callback_uri={'yes' if callback_uri else 'no'}, "
-                        f"base_url_override={'yes' if base_url_override else 'no'}"
+                        f"[WATCH] Batch file reuse mode enabled: file={file_path.name}, "
+                        f"jobs={len(job_params_list)}"
                     )
-                    ok, records = run_config(
+                    ok, batch_results = run_config_batch_reuse_session(
                         str(cfg_path),
                         headless=headless,
-                        params=job_params,
+                        params_list=job_params_list,
                         base_url_override=base_url_override,
                     )
                     if not ok:
                         success = False
-                        break
-
-                    if callback_uri:
-                        ok = _push_records_to_uri(
-                            uri=callback_uri,
-                            site_name=site_name,
-                            input_file_name=file_path.name,
+                    elif callback_uri:
+                        push_jobs.extend(batch_results)
+                else:
+                    for idx, job_params in enumerate(job_params_list, start=1):
+                        print(
+                            f"[WATCH] Trigger crawl: site={site_name}, file={file_path.name}, "
+                            f"job={idx}/{len(job_params_list)}, params={sorted(job_params.keys())}, "
+                            f"callback_uri={'yes' if callback_uri else 'no'}, "
+                            f"base_url_override={'yes' if base_url_override else 'no'}"
+                        )
+                        ok, records = run_config(
+                            str(cfg_path),
+                            headless=headless,
                             params=job_params,
-                            records=records,
-                            timeout_seconds=push_timeout_seconds,
-                            retries=push_retries,
-                            verify_ssl=push_verify_ssl,
+                            base_url_override=base_url_override,
                         )
                         if not ok:
                             success = False
                             break
+
+                        if callback_uri:
+                            push_jobs.append({"params": dict(job_params), "records": records})
+
+                if success and callback_uri:
+                    if len(push_jobs) > 1:
+                        print(
+                            f"[WATCH] Aggregated callback push for file={file_path.name}, "
+                            f"jobs={len(push_jobs)}"
+                        )
+                    ok = _push_records_to_uri(
+                        uri=callback_uri,
+                        site_name=site_name,
+                        input_file_name=file_path.name,
+                        params=runtime_params,
+                        records=[],
+                        job_results=push_jobs,
+                        timeout_seconds=push_timeout_seconds,
+                        retries=push_retries,
+                        verify_ssl=push_verify_ssl,
+                    )
+                    if not ok:
+                        success = False
                 if success and file_path.exists():
                     try:
                         archived = archive_input_file(file_path, site_name)
