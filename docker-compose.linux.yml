@@ -8,9 +8,9 @@ services:
     environment:
       TZ: Asia/Shanghai
     volumes:
-      - ./config:/app/config
-      - ./input:/app/input
-      - ./input_done:/app/input_done
-      - ./output:/app/output
-      - ./log:/app/log
+      - /local/home/rbadmin_app1/mount/crawer/config:/app/config
+      - /local/home/rbadmin_app1/mount/crawer/input:/app/input
+      - /local/home/rbadmin_app1/mount/crawer/input_done:/app/input_done
+      - /local/home/rbadmin_app1/mount/crawer/output:/app/output
+      - /local/home/rbadmin_app1/mount/crawer/log:/app/log
     command: ["python", "-m", "src.main", "--watch-input", "--headless"]

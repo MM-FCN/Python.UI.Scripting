@@ -1,45 +1,92 @@
-FROM python:3.13-slim
+FROM registry.access.redhat.com/ubi9/python-312:9.6
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive \
-    GECKODRIVER_PATH=/usr/local/bin/geckodriver
+    PIP_NO_CACHE_DIR=1 \
+    MSEDGEDRIVER_PATH=/usr/local/bin/msedgedriver
 
 WORKDIR /app
+USER 0
+# ========== 代理配置（仅在构建阶段有效）==========
+ARG HTTP_PROXY="http://172.17.0.1:3128"   
+ARG HTTPS_PROXY="http://172.17.0.1:3128"
+ARG NO_PROXY="localhost,127.0.0.1"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# 将代理设置为环境变量
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+# =============================================
+RUN printf '%s\n' \
+        '[ubi-9-baseos]' \
+        'name=Red Hat UBI 9 BaseOS' \
+        'baseurl=https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi9/9/x86_64/baseos/os/' \
+        'enabled=1' \
+        'gpgcheck=0' \
+        > /etc/yum.repos.d/ubi-9-baseos.repo \
+    && printf '%s\n' \
+        '[ubi-9-appstream]' \
+        'name=Red Hat UBI 9 AppStream' \
+        'baseurl=https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi9/9/x86_64/appstream/os/' \
+        'enabled=1' \
+        'gpgcheck=0' \
+        > /etc/yum.repos.d/ubi-9-appstream.repo \
+    && printf '%s\n' \
+        '[ubi-9-codeready-builder]' \
+        'name=Red Hat UBI 9 CodeReady Builder' \
+        'baseurl=https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi9/9/x86_64/codeready-builder/os/' \
+        'enabled=1' \
+        'gpgcheck=0' \
+        > /etc/yum.repos.d/ubi-9-codeready-builder.repo \
+    && yum install -y \
         ca-certificates \
-        curl \
-        firefox-esr \
-        fonts-noto-cjk \
-        fonts-noto-color-emoji \
-        libgtk-3-0 \
-        libdbus-glib-1-2 \
-        libasound2 \
-        libx11-xcb1 \
-        libxt6 \
-        libxrandr2 \
-        libxdamage1 \
-        libxcomposite1 \
-        libxfixes3 \
-        libxrender1 \
-        libxi6 \
-        libatk1.0-0 \
-        libatk-bridge2.0-0 \
-        libnss3 \
-        libnspr4 \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL -o /tmp/geckodriver.tar.gz \
-        https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-linux64.tar.gz \
-    && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/geckodriver \
-    && rm -f /tmp/geckodriver.tar.gz
+        tar \
+        gzip \
+        unzip \
+        findutils \
+        fontconfig \
+        desktop-file-utils \
+        liberation-fonts-common \
+        liberation-mono-fonts \
+        gtk3 \
+        dbus-glib \
+        alsa-lib \
+        libX11-xcb \
+        libXt \
+        libXrandr \
+        libXdamage \
+        libXcomposite \
+        libXfixes \
+        libXrender \
+        libXi \
+        atk \
+        at-spi2-atk \
+        nss \
+        nspr \
+        mesa-libgbm \
+    && rpm --import https://packages.microsoft.com/keys/microsoft.asc \
+    && printf '%s\n' \
+        '[microsoft-edge]' \
+        'name=Microsoft Edge' \
+        'baseurl=https://packages.microsoft.com/yumrepos/edge' \
+        'enabled=1' \
+        'gpgcheck=1' \
+        'gpgkey=https://packages.microsoft.com/keys/microsoft.asc' \
+        > /etc/yum.repos.d/microsoft-edge.repo \
+    && yum install -y --setopt=install_weak_deps=False --nobest microsoft-edge-stable \
+    && EDGE_VERSION="$(rpm -q --qf '%{VERSION}\n' microsoft-edge-stable)" \
+    && curl -fsSL -o /tmp/edgedriver.zip \
+        "https://msedgedriver.azureedge.net/${EDGE_VERSION}/edgedriver_linux64.zip" \
+    && unzip /tmp/edgedriver.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/msedgedriver \
+    && rm -f /tmp/edgedriver.zip \
+    && yum clean all \
+    && rm -rf /var/cache/dnf /var/cache/yum
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY src ./src
+COPY config ./config
 
 CMD ["python", "-m", "src.main", "--watch-input", "--headless"]

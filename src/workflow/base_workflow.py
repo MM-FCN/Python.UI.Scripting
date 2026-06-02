@@ -10,7 +10,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
+# import cv2
+cv2 = None
+
 import numpy as np
 from PIL import Image
 from selenium import webdriver
@@ -60,6 +62,12 @@ class WorkflowCrawler:
         )
         self.popup_data: List[Dict[str, Any]] = []  # 存储从弹出框爬取的数据
         self._current_task_name: str = ""
+
+    def _opencv_available(self) -> bool:
+        if cv2 is not None:
+            return True
+        print("[CAPTCHA] OpenCV is not installed; image-based captcha detection is disabled.")
+        return False
 
     def _safe_current_url(self) -> str:
         try:
@@ -1205,6 +1213,8 @@ class WorkflowCrawler:
 
     def _detect_gap_canvas_js(self, canvas_selector: str, piece_img_selector: str) -> Optional[int]:
         """通过 JS 读取 canvas 背景图和拼图块图像，OpenCV 模板匹配找缺口位置，返回页面绝对 X 坐标（CSS 像素）。"""
+        if not self._opencv_available():
+            return None
         try:
             # 读取 canvas 图像和位置信息
             canvas_info = self.driver.execute_script(f"""
@@ -1284,6 +1294,8 @@ class WorkflowCrawler:
 
     def _detect_gap_by_edge_canvas(self, bg_img: np.ndarray) -> Optional[int]:
         """边缘检测：在背景图中找缺口列位置（排除最左侧初始拼图区域）。"""
+        if not self._opencv_available():
+            return None
         try:
             gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
             blurred = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -1304,6 +1316,8 @@ class WorkflowCrawler:
 
     def _detect_slider_gap(self, bg_selector: Optional[str], piece_selector: Optional[str]) -> Optional[int]:
         """截图背景和滑块拼图，用模板匹配找到缺口的 X 坐标（页面绝对坐标）。"""
+        if not self._opencv_available():
+            return None
         try:
             # 截取整页截图转为 numpy
             screenshot = self.driver.get_screenshot_as_png()
@@ -1345,6 +1359,8 @@ class WorkflowCrawler:
 
     def _detect_gap_by_edge(self, bg_img: np.ndarray, bg_rect: Dict) -> Optional[int]:
         """用边缘检测在背景图上找缺口列位置。"""
+        if not self._opencv_available():
+            return None
         try:
             gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
             blurred = cv2.GaussianBlur(gray, (3, 3), 0)
