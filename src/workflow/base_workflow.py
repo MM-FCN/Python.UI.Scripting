@@ -500,14 +500,17 @@ class WorkflowCrawler:
             candidates.append(Path(path_hit))
 
         candidates.extend([
+            Path("geckodriver"),
             Path("geckodriver.exe"),
+            Path("drivers") / "geckodriver",
             Path("drivers") / "geckodriver.exe",
+            Path.home() / ".wdm" / "drivers" / "geckodriver" / "linux64" / "geckodriver",
             Path.home() / ".wdm" / "drivers" / "geckodriver" / "win64" / "geckodriver.exe",
         ])
 
         cache_root = Path.home() / ".wdm" / "drivers" / "geckodriver"
         if cache_root.exists():
-            for path in sorted(cache_root.glob("**/geckodriver.exe"), reverse=True):
+            for path in sorted(cache_root.glob("**/geckodriver*"), reverse=True):
                 candidates.append(path)
 
         for candidate in candidates:
@@ -535,14 +538,17 @@ class WorkflowCrawler:
             candidates.append(Path(path_hit))
 
         candidates.extend([
+            Path("drivers") / "msedgedriver",
             Path("drivers") / "msedgedriver.exe",
+            Path("msedgedriver"),
             Path("msedgedriver.exe"),
+            Path.home() / ".wdm" / "drivers" / "edgedriver" / "linux64" / "msedgedriver",
             Path.home() / ".wdm" / "drivers" / "edgedriver" / "win64" / "msedgedriver.exe",
         ])
 
         cache_root = Path.home() / ".wdm" / "drivers" / "edgedriver"
         if cache_root.exists():
-            for path in sorted(cache_root.glob("**/msedgedriver.exe"), reverse=True):
+            for path in sorted(cache_root.glob("**/msedgedriver*"), reverse=True):
                 candidates.append(path)
 
         for candidate in candidates:

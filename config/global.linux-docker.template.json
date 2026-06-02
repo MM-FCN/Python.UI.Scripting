@@ -1,0 +1,15 @@
+{
+  "watch": {
+    "enabled_by_default": true,
+    "interval_seconds": 10,
+    "input_root": "input",
+    "push_timeout_seconds": 30,
+    "push_retries": 1,
+    "push_verify_ssl": false,
+    "sites": [
+      "cargo",
+      "cargonavi",
+      "enx"
+    ]
+  }
+}

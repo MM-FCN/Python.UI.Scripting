@@ -1,0 +1,16 @@
+services:
+  crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux
+    container_name: python-ui-scripting-crawler
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config:/app/config
+      - ./input:/app/input
+      - ./input_done:/app/input_done
+      - ./output:/app/output
+      - ./log:/app/log
+    command: ["python", "-m", "src.main", "--watch-input", "--headless"]

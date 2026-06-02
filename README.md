@@ -140,6 +140,41 @@ python -m src.main --all-sites
 python -m src.main --watch-input --watch-sites cargo,cargonavi --watch-interval 10
 ```
 
+## 3.1 Linux Docker 一键切换
+
+适用场景：Linux 服务器 + Docker 部署（建议使用 headless）。
+
+已提供的最小部署文件：
+
+- `Dockerfile.linux`：Python + Firefox + geckodriver 运行镜像。
+- `docker-compose.linux.yml`：容器编排（挂载 `config/input/output/log`）。
+- `config/global.linux-docker.template.json`：Linux 默认轮询模板（`cargo/cargonavi/enx`）。
+- `scripts/switch_to_linux_docker.sh`：备份并切换 `config/global.json`，然后一键拉起容器。
+
+一键切换并启动：
+
+```bash
+chmod +x scripts/switch_to_linux_docker.sh
+./scripts/switch_to_linux_docker.sh
+```
+
+查看运行日志：
+
+```bash
+docker compose -f docker-compose.linux.yml logs -f
+```
+
+停止容器：
+
+```bash
+docker compose -f docker-compose.linux.yml down
+```
+
+说明：
+
+- Linux Docker 默认建议跑 `cargo/cargonavi/enx` 的 headless 轮询。
+- `cma/hapag` 若存在风控识别，建议保留非 headless 或接管模式在桌面环境执行。
+
 ## 4. 配置结构说明
 
 ### navigation_steps 支持的 action

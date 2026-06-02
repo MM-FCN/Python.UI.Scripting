@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+.edge-debug-profile
+output
+log
+input_done
+.vscode
+*.ipynb
+geckodriver.exe
+msedgedriver.exe
