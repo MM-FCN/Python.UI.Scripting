@@ -8,3 +8,4 @@ log/
 .edge-debug-profile/
 .github
 openspec
+/.vs
