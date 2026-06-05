@@ -35,20 +35,9 @@ def get_platform_default_selenium_remote_url(os_name: Optional[str] = None) -> s
 
 def resolve_selenium_remote_url(
     *,
-    explicit_override: Optional[str] = None,
     global_config: Optional[Mapping[str, Any]] = None,
-    environ: Optional[Mapping[str, str]] = None,
     os_name: Optional[str] = None,
 ) -> tuple[str, str]:
-    runtime_value = str(explicit_override or "").strip()
-    if runtime_value:
-        return runtime_value, "runtime-override"
-
-    env_map = environ or os.environ
-    env_value = str(env_map.get("SELENIUM_REMOTE_URL", "")).strip()
-    if env_value:
-        return env_value, "environment"
-
     if global_config is not None:
         global_value = str(global_config.get("selenium_remote_url", "")).strip()
         if global_value:

@@ -77,10 +77,6 @@ def parse_args() -> argparse.Namespace:
         "--watch-sites",
         help="Comma-separated site folders to process in timer mode, e.g. cargo,cargonavi",
     )
-    parser.add_argument(
-        "--selenium-remote-url",
-        help="Explicit Selenium Remote WebDriver URL override for this run",
-    )
     return parser.parse_args()
 
 
@@ -102,12 +98,10 @@ def _load_runtime_site_config(
     config_path: str,
     *,
     global_config: Optional[dict[str, Any]] = None,
-    selenium_remote_url_override: Optional[str] = None,
 ) -> dict[str, Any]:
     config = load_config(config_path)
     deprecated_site_url = get_deprecated_site_selenium_remote_url(config)
     resolved_url, source = resolve_selenium_remote_url(
-        explicit_override=selenium_remote_url_override,
         global_config=global_config,
     )
     config["selenium_remote_url"] = resolved_url
@@ -126,7 +120,6 @@ def run_config(
     params: Optional[dict[str, str]] = None,
     base_url_override: Optional[str] = None,
     global_config: Optional[dict[str, Any]] = None,
-    selenium_remote_url_override: Optional[str] = None,
 ) -> tuple[bool, list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config: {config_path}")
@@ -135,7 +128,6 @@ def run_config(
         config = _load_runtime_site_config(
             config_path,
             global_config=global_config,
-            selenium_remote_url_override=selenium_remote_url_override,
         )
         if base_url_override:
             config["base_url"] = base_url_override
@@ -159,7 +151,6 @@ def run_config_batch_reuse_session(
     params_list: list[dict[str, str]],
     base_url_override: Optional[str] = None,
     global_config: Optional[dict[str, Any]] = None,
-    selenium_remote_url_override: Optional[str] = None,
 ) -> tuple[bool, list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config (batch reuse): {config_path}")
@@ -169,7 +160,6 @@ def run_config_batch_reuse_session(
         config = _load_runtime_site_config(
             config_path,
             global_config=global_config,
-            selenium_remote_url_override=selenium_remote_url_override,
         )
         if base_url_override:
             config["base_url"] = base_url_override
@@ -460,12 +450,11 @@ def _run_input_timer_mode(
     headless: bool,
     interval_seconds: int,
     base_runtime_params: dict[str, str],
-    global_config: Optional[dict[str, Any]] = None,
-    selenium_remote_url_override: Optional[str] = None,
-    watch_sites: Optional[set[str]] = None,
-    push_timeout_seconds: int = 30,
-    push_retries: int = 0,
-    push_verify_ssl: bool = True,
+    global_config: dict[str, Any],
+    watch_sites: Optional[set[str]],
+    push_timeout_seconds: int,
+    push_retries: int,
+    push_verify_ssl: bool,
 ) -> None:
     interval = max(1, int(interval_seconds))
     seen_fingerprints: dict[str, tuple[int, int]] = {}
@@ -676,8 +665,7 @@ def _run_input_timer_mode(
                         headless=headless,
                         params_list=job_params_list,
                         base_url_override=base_url_override,
-                        global_config=global_config,
-                        selenium_remote_url_override=selenium_remote_url_override,
+                        global_config=global_cfg,
                     )
                     if not ok:
                         success = False
@@ -696,8 +684,7 @@ def _run_input_timer_mode(
                             headless=headless,
                             params=job_params,
                             base_url_override=base_url_override,
-                            global_config=global_config,
-                            selenium_remote_url_override=selenium_remote_url_override,
+                            global_config=global_cfg,
                         )
                         if not ok:
                             success = False
@@ -827,7 +814,6 @@ def main() -> None:
                 interval_seconds=interval_seconds,
                 base_runtime_params=runtime_params,
                 global_config=global_cfg,
-                selenium_remote_url_override=args.selenium_remote_url,
                 watch_sites=watch_sites,
                 push_timeout_seconds=push_timeout_seconds,
                 push_retries=push_retries,
@@ -847,7 +833,6 @@ def main() -> None:
                     args.headless,
                     runtime_params,
                     global_config=global_cfg,
-                    selenium_remote_url_override=args.selenium_remote_url,
                 )
         elif args.config:
             cfg_path = Path(args.config)
@@ -867,7 +852,6 @@ def main() -> None:
                 args.headless,
                 runtime_params,
                 global_config=global_cfg,
-                selenium_remote_url_override=args.selenium_remote_url,
             )
         elif args.site:
             cfg_path = Path("config/sites") / args.site / "config.json"
@@ -879,7 +863,6 @@ def main() -> None:
                 args.headless,
                 runtime_params,
                 global_config=global_cfg,
-                selenium_remote_url_override=args.selenium_remote_url,
             )
         else:
             print("[ERROR] Please provide --site <name>, --all-sites, --config ..., or use --watch-input")
