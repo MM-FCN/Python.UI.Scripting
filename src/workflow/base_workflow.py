@@ -34,6 +34,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.ui import WebDriverWait
 
+from src.runtime_config import resolve_selenium_remote_url
+
 
 BY_MAP = {
     "id": By.ID,
@@ -62,14 +64,12 @@ class WorkflowCrawler:
         self.popup_data: List[Dict[str, Any]] = []  # 存储从弹出框爬取的数据
         self._current_task_name: str = ""
 
-    def _get_remote_webdriver_url(self) -> str:
-        remote_url = str(
-            self.config.get(
-                "selenium_remote_url",
-                os.getenv("SELENIUM_REMOTE_URL", "http://localhost:4444/wd/hub"),
-            )
-        ).strip()
-        return remote_url or "http://localhost:4444/wd/hub"
+    def _get_remote_webdriver_url(self) -> tuple[str, str]:
+        configured_url = str(self.config.get("selenium_remote_url", "")).strip()
+        configured_source = str(self.config.get("__selenium_remote_url_source", "")).strip()
+        if configured_url:
+            return configured_url, configured_source or "runtime-config"
+        return resolve_selenium_remote_url()
 
     def _create_remote_driver(self, remote_url: str, options: Any) -> webdriver.Remote:
         host = (urlparse(remote_url).hostname or "").strip().lower()
@@ -163,7 +163,7 @@ class WorkflowCrawler:
                 records = self._scrape_records()
                 self._save_records(records)
 
-                task_records = self.popup_data if self.popup_data else recordmerge 
+                task_records = self.popup_data if self.popup_data else records
                 all_records.extend(task_records)
                 print(
                     f"[TASK {idx}] {task_name} completed, records={len(task_records)} "
@@ -188,9 +188,9 @@ class WorkflowCrawler:
         if page_load_strategy not in {"normal", "eager", "none"}:
             page_load_strategy = "eager"
 
-        remote_url = self._get_remote_webdriver_url()
+        remote_url, remote_url_source = self._get_remote_webdriver_url()
         print(f"[BROWSER] Creating {browser} options...")
-        print(f"[BROWSER] Using Selenium remote endpoint: {remote_url}")
+        print(f"[BROWSER] Using Selenium remote endpoint ({remote_url_source}): {remote_url}")
         print(f"[BROWSER] Setting download directory: {self._download_dir}")
         Path(self._download_dir).mkdir(parents=True, exist_ok=True)
 

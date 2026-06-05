@@ -1,4 +1,8 @@
 {
+  "_descriptions": {
+    "selenium_remote_url": "全局 Selenium Remote WebDriver 地址；优先级低于命令行 --selenium-remote-url 和环境变量 SELENIUM_REMOTE_URL。"
+  },
+  "selenium_remote_url": "http://szh2vm0372.apac.bosch.com:4444/wd/hub",
   "watch": {
     "_descriptions": {
       "enabled_by_default": "是否默认启用轮询模式；当未传 --site/--config/--all-sites 时会自动进入 watch。",
@@ -16,7 +20,7 @@
     "push_retries": 1,
     "push_verify_ssl": false,
     "sites": [
-      "cma"
+      "cargo"
     ]
   }
 }

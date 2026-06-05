@@ -15,6 +15,11 @@ from dotenv import load_dotenv
 
 from src.config_loader import ConfigError, load_config
 from src.logging_utils import setup_file_logging
+from src.runtime_config import (
+    get_deprecated_site_selenium_remote_url,
+    load_global_config,
+    resolve_selenium_remote_url,
+)
 from src.workflow import create_workflow_crawler
 
 
@@ -72,6 +77,10 @@ def parse_args() -> argparse.Namespace:
         "--watch-sites",
         help="Comma-separated site folders to process in timer mode, e.g. cargo,cargonavi",
     )
+    parser.add_argument(
+        "--selenium-remote-url",
+        help="Explicit Selenium Remote WebDriver URL override for this run",
+    )
     return parser.parse_args()
 
 
@@ -89,22 +98,26 @@ def _parse_watch_sites(raw_watch_sites: Optional[Any]) -> Optional[set[str]]:
     return sites or None
 
 
-def _load_global_config(project_root: Path) -> dict[str, Any]:
-    config_path = project_root / "config" / "global.json"
-    if not config_path.exists():
-        return {}
-
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"[CONFIG] Failed to load global config {config_path}: {e}")
-        return {}
-
-    if not isinstance(payload, dict):
-        print(f"[CONFIG] Global config root must be JSON object: {config_path}")
-        return {}
-
-    return payload
+def _load_runtime_site_config(
+    config_path: str,
+    *,
+    global_config: Optional[dict[str, Any]] = None,
+    selenium_remote_url_override: Optional[str] = None,
+) -> dict[str, Any]:
+    config = load_config(config_path)
+    deprecated_site_url = get_deprecated_site_selenium_remote_url(config)
+    resolved_url, source = resolve_selenium_remote_url(
+        explicit_override=selenium_remote_url_override,
+        global_config=global_config,
+    )
+    config["selenium_remote_url"] = resolved_url
+    config["__selenium_remote_url_source"] = source
+    if deprecated_site_url:
+        print(
+            "[CONFIG] site-level selenium_remote_url is deprecated and ignored for "
+            f"{config_path}: {deprecated_site_url}"
+        )
+    return config
 
 
 def run_config(
@@ -112,12 +125,18 @@ def run_config(
     headless: bool,
     params: Optional[dict[str, str]] = None,
     base_url_override: Optional[str] = None,
+    global_config: Optional[dict[str, Any]] = None,
+    selenium_remote_url_override: Optional[str] = None,
 ) -> tuple[bool, list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config: {config_path}")
     print(f"{'='*60}")
     try:
-        config = load_config(config_path)
+        config = _load_runtime_site_config(
+            config_path,
+            global_config=global_config,
+            selenium_remote_url_override=selenium_remote_url_override,
+        )
         if base_url_override:
             config["base_url"] = base_url_override
             print(f"[TASK] Override base_url by input URI: {base_url_override}")
@@ -139,13 +158,19 @@ def run_config_batch_reuse_session(
     headless: bool,
     params_list: list[dict[str, str]],
     base_url_override: Optional[str] = None,
+    global_config: Optional[dict[str, Any]] = None,
+    selenium_remote_url_override: Optional[str] = None,
 ) -> tuple[bool, list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config (batch reuse): {config_path}")
     print(f"[TASK] Batch jobs: {len(params_list)}")
     print(f"{'='*60}")
     try:
-        config = load_config(config_path)
+        config = _load_runtime_site_config(
+            config_path,
+            global_config=global_config,
+            selenium_remote_url_override=selenium_remote_url_override,
+        )
         if base_url_override:
             config["base_url"] = base_url_override
             print(f"[TASK] Override base_url by input URI: {base_url_override}")
@@ -435,6 +460,8 @@ def _run_input_timer_mode(
     headless: bool,
     interval_seconds: int,
     base_runtime_params: dict[str, str],
+    global_config: Optional[dict[str, Any]] = None,
+    selenium_remote_url_override: Optional[str] = None,
     watch_sites: Optional[set[str]] = None,
     push_timeout_seconds: int = 30,
     push_retries: int = 0,
@@ -649,6 +676,8 @@ def _run_input_timer_mode(
                         headless=headless,
                         params_list=job_params_list,
                         base_url_override=base_url_override,
+                        global_config=global_config,
+                        selenium_remote_url_override=selenium_remote_url_override,
                     )
                     if not ok:
                         success = False
@@ -667,6 +696,8 @@ def _run_input_timer_mode(
                             headless=headless,
                             params=job_params,
                             base_url_override=base_url_override,
+                            global_config=global_config,
+                            selenium_remote_url_override=selenium_remote_url_override,
                         )
                         if not ok:
                             success = False
@@ -729,7 +760,7 @@ def main() -> None:
     args = parse_args()
     project_root = Path.cwd()
     site_root = (project_root / "config" / "sites").resolve()
-    global_cfg = _load_global_config(project_root)
+    global_cfg = load_global_config(project_root)
     watch_cfg = global_cfg.get("watch", {}) if isinstance(global_cfg.get("watch"), dict) else {}
 
     log_cfg_path: Optional[Path] = None
@@ -795,6 +826,8 @@ def main() -> None:
                 headless=args.headless,
                 interval_seconds=interval_seconds,
                 base_runtime_params=runtime_params,
+                global_config=global_cfg,
+                selenium_remote_url_override=args.selenium_remote_url,
                 watch_sites=watch_sites,
                 push_timeout_seconds=push_timeout_seconds,
                 push_retries=push_retries,
@@ -809,7 +842,13 @@ def main() -> None:
                 return
             print(f"[INFO] Found {len(site_configs)} site(s): {[p.parent.name for p in site_configs]}")
             for cfg_path in site_configs:
-                run_config(str(cfg_path), args.headless, runtime_params)
+                run_config(
+                    str(cfg_path),
+                    args.headless,
+                    runtime_params,
+                    global_config=global_cfg,
+                    selenium_remote_url_override=args.selenium_remote_url,
+                )
         elif args.config:
             cfg_path = Path(args.config)
             if not cfg_path.exists():
@@ -823,13 +862,25 @@ def main() -> None:
             if relative.name != "config.json":
                 print("[ERROR] --config only supports files named config.json under config/sites/<site>/")
                 return
-            run_config(str(cfg_path), args.headless, runtime_params)
+            run_config(
+                str(cfg_path),
+                args.headless,
+                runtime_params,
+                global_config=global_cfg,
+                selenium_remote_url_override=args.selenium_remote_url,
+            )
         elif args.site:
             cfg_path = Path("config/sites") / args.site / "config.json"
             if not cfg_path.exists():
                 print(f"[ERROR] Site config not found: {cfg_path}")
                 return
-            run_config(str(cfg_path), args.headless, runtime_params)
+            run_config(
+                str(cfg_path),
+                args.headless,
+                runtime_params,
+                global_config=global_cfg,
+                selenium_remote_url_override=args.selenium_remote_url,
+            )
         else:
             print("[ERROR] Please provide --site <name>, --all-sites, --config ..., or use --watch-input")
     finally:

@@ -8,7 +8,7 @@
 
 ## 1. 安装
 
-说明：项目现在统一通过 Selenium Remote WebDriver 连接浏览器，默认地址是 `http://localhost:4444/wd/hub`。
+说明：项目现在统一通过 Selenium Remote WebDriver 连接浏览器。Selenium 地址支持显式运行参数、环境变量和全局配置覆盖；未配置时，Windows 默认 `http://szh2vm0372.apac.bosch.com:4444/wd/hub`，Linux 默认 `http://172.17.0.1:4444/wd/hub`。
 
 运行项目前，需要先准备一个可访问该地址的 Selenium 服务（例如 `selenium/standalone-edge`）。
 
@@ -36,10 +36,11 @@ SITE_USERNAME=你的用户名
 SITE_PASSWORD=你的密码
 ```
 
-3. 可选：在 `config/global.json` 里配置轮询默认项（轮询间隔、输入目录、处理站点）：
+3. 可选：在 `config/global.json` 里配置全局 Selenium 地址和轮询默认项（轮询间隔、输入目录、处理站点）：
 
 ```json
 {
+	"selenium_remote_url": "http://szh2vm0372.apac.bosch.com:4444/wd/hub",
 	"watch": {
 		"enabled_by_default": true,
 		"interval_seconds": 10,
@@ -53,6 +54,7 @@ SITE_PASSWORD=你的密码
 
 配置项说明：
 
+- `selenium_remote_url`：全局 Selenium Remote WebDriver 地址。该字段位于 `config/global.json` 根级，供所有站点共享。
 - `watch`：轮询相关总配置对象。
 - `watch.enabled_by_default`：是否在未传 `--site/--config/--all-sites` 时自动进入轮询模式。`true` 表示默认启动即轮询。
 - `watch.interval_seconds`：轮询间隔（秒）。每次扫描 `input_root` 后等待该秒数再进行下一次扫描。
@@ -64,7 +66,9 @@ SITE_PASSWORD=你的密码
 
 优先级说明：
 
-- 命令行参数优先级高于 `config/global.json`。
+- Selenium 地址优先级：`--selenium-remote-url` > 环境变量 `SELENIUM_REMOTE_URL` > `config/global.json` 根级 `selenium_remote_url` > 平台默认值。
+- Windows 平台默认值：`http://szh2vm0372.apac.bosch.com:4444/wd/hub`。
+- Linux 平台默认值：`http://172.17.0.1:4444/wd/hub`。
 - 例如传了 `--watch-sites cargo`，会覆盖 `watch.sites` 的配置。
 
 ## 3. 运行
@@ -80,6 +84,7 @@ python -m src.main --site cargonavi
 ```bash
 python -m src.main --site cargonavi --mawb 217-08282315
 python -m src.main --site cargo --container-no ONEU6961505
+python -m src.main --site cargo --selenium-remote-url http://localhost:4444/wd/hub
 ```
 
 启动本地 Selenium Edge 节点后运行：
@@ -88,7 +93,7 @@ python -m src.main --site cargo --container-no ONEU6961505
 python -m src.main --site edge_attach
 ```
 
-说明：程序会连接 `http://localhost:4444/wd/hub`，不再直接启动或接管本地 Edge 浏览器。
+说明：程序会按运行时优先级解析 Selenium 地址，不再直接启动或接管本地 Edge 浏览器。
 
 执行 hapag 配置抓取：
 
@@ -96,7 +101,7 @@ python -m src.main --site edge_attach
 python -m src.main --site hapag --container-no ONEU6961505
 ```
 
-说明：如需修改远端 Selenium 地址，可设置环境变量 `SELENIUM_REMOTE_URL`，或在站点配置里加入 `selenium_remote_url`。
+说明：如需修改远端 Selenium 地址，可使用命令行参数 `--selenium-remote-url`、环境变量 `SELENIUM_REMOTE_URL`，或修改 `config/global.json` 根级 `selenium_remote_url`。站点配置里的 `selenium_remote_url` 已不再是主路径支持的配置来源。
 
 轮询模式可继续使用原有启动编排，但浏览器会由远端 Selenium 服务提供：
 
@@ -167,7 +172,7 @@ docker compose -f docker-compose.linux.yml down
 说明：
 
 - Linux Docker 默认建议跑 `cargo/cargonavi/enx` 的 headless 轮询。
-- 容器内爬虫会固定连接 `http://localhost:4444/wd/hub`；compose 已通过共享网络命名空间把该地址映射到 Selenium 容器。
+- Linux Docker 模板默认使用 `http://172.17.0.1:4444/wd/hub`，可通过环境变量 `SELENIUM_REMOTE_URL` 或 `config/global.json` 覆盖。
 
 ## 4. 配置结构说明
 

@@ -6,3 +6,5 @@ input_done/
 log/
 .vscode/
 .edge-debug-profile/
+.github
+openspec
