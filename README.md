@@ -8,12 +8,9 @@
 
 ## 1. 安装
 
-说明：项目使用 Firefox + geckodriver（由 `webdriver-manager` 自动管理）。
+说明：项目现在统一通过 Selenium Remote WebDriver 连接浏览器，默认地址是 `http://localhost:4444/wd/hub`。
 
-如果公司网络无法访问 GitHub，可手动放置 `geckodriver.exe`：
-
-- 放到项目根目录（`./geckodriver.exe`）或 `./drivers/geckodriver.exe`
-- 或配置环境变量 `GECKODRIVER_PATH` 指向驱动完整路径
+运行项目前，需要先准备一个可访问该地址的 Selenium 服务（例如 `selenium/standalone-edge`）。
 
 ```bash
 python -m venv .venv
@@ -85,25 +82,23 @@ python -m src.main --site cargonavi --mawb 217-08282315
 python -m src.main --site cargo --container-no ONEU6961505
 ```
 
-接管已手动打开的 Edge（9222 调试端口）：
+启动本地 Selenium Edge 节点后运行：
 
 ```powershell
-& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222 --user-data-dir="C:\edge-debug-profile"
 python -m src.main --site edge_attach
 ```
 
-说明：`edge_attach` 站点会连接到 `127.0.0.1:9222`，打印当前页面标题，并默认不关闭你手动打开的 Edge。
+说明：程序会连接 `http://localhost:4444/wd/hub`，不再直接启动或接管本地 Edge 浏览器。
 
-接管浏览器后直接执行 hapag 配置抓取：
+执行 hapag 配置抓取：
 
 ```powershell
-& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222 --user-data-dir="C:\edge-debug-profile"
 python -m src.main --site hapag --container-no ONEU6961505
 ```
 
-说明：`config/sites/hapag/config.json` 已支持接管参数（`edge.attach_existing`、`edge.debugger_address`、`startup_navigate`、`keep_browser_open`），可由客户自行修改。
+说明：如需修改远端 Selenium 地址，可设置环境变量 `SELENIUM_REMOTE_URL`，或在站点配置里加入 `selenium_remote_url`。
 
-轮询模式下按配置决定“系统启动”或“批处理启动后接管”：
+轮询模式可继续使用原有启动编排，但浏览器会由远端 Selenium 服务提供：
 
 ```json
 {
@@ -118,9 +113,8 @@ python -m src.main --site hapag --container-no ONEU6961505
 ```
 
 说明：
-- `mode=system`：不执行批处理，由 Selenium 按站点配置直接启动浏览器。
-- `mode=batch_attach`：watcher 会先执行 `batch_file` 启动浏览器，再按 `edge.attach_existing=true` 去接管。
-- `run_once=true`：同一站点在该次 watcher 生命周期中只执行一次批处理，避免重复起浏览器。
+- `mode=system`：仅启动爬虫流程，浏览器由 Selenium Remote WebDriver 提供。
+- `run_once=true`：同一站点在该次 watcher 生命周期中只执行一次批处理。
 
 无界面模式：
 
@@ -146,8 +140,8 @@ python -m src.main --watch-input --watch-sites cargo,cargonavi --watch-interval 
 
 已提供的最小部署文件：
 
-- `Dockerfile.linux`：Python + Firefox + geckodriver 运行镜像。
-- `docker-compose.linux.yml`：容器编排（挂载 `config/input/output/log`）。
+- `Dockerfile.linux`：仅打包 Python 爬虫运行环境，不再内置浏览器。
+- `docker-compose.linux.yml`：容器编排，内含 `crawler + selenium/standalone-edge`，并共享 `localhost:4444`。
 - `config/global.linux-docker.template.json`：Linux 默认轮询模板（`cargo/cargonavi/enx`）。
 - `scripts/switch_to_linux_docker.sh`：备份并切换 `config/global.json`，然后一键拉起容器。
 
@@ -173,7 +167,7 @@ docker compose -f docker-compose.linux.yml down
 说明：
 
 - Linux Docker 默认建议跑 `cargo/cargonavi/enx` 的 headless 轮询。
-- `cma/hapag` 若存在风控识别，建议保留非 headless 或接管模式在桌面环境执行。
+- 容器内爬虫会固定连接 `http://localhost:4444/wd/hub`；compose 已通过共享网络命名空间把该地址映射到 Selenium 容器。
 
 ## 4. 配置结构说明
 

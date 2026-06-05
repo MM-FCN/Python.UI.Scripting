@@ -9,6 +9,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 # import cv2
 cv2 = None
@@ -25,15 +26,13 @@ from selenium.common.exceptions import (
 )
 from selenium.webdriver import ActionChains, Keys
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.proxy import Proxy, ProxyType
 from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.remote.client_config import ClientConfig
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
-from webdriver_manager.firefox import GeckoDriverManager
 
 
 BY_MAP = {
@@ -62,6 +61,30 @@ class WorkflowCrawler:
         )
         self.popup_data: List[Dict[str, Any]] = []  # 存储从弹出框爬取的数据
         self._current_task_name: str = ""
+
+    def _get_remote_webdriver_url(self) -> str:
+        remote_url = str(
+            self.config.get(
+                "selenium_remote_url",
+                os.getenv("SELENIUM_REMOTE_URL", "http://localhost:4444/wd/hub"),
+            )
+        ).strip()
+        return remote_url or "http://localhost:4444/wd/hub"
+
+    def _create_remote_driver(self, remote_url: str, options: Any) -> webdriver.Remote:
+        host = (urlparse(remote_url).hostname or "").strip().lower()
+        client_config: Optional[ClientConfig] = None
+        if host in {"localhost", "127.0.0.1", "::1", "selenium"}:
+            print(f"[BROWSER] Bypassing HTTP proxy for Selenium endpoint: {remote_url}")
+            client_config = ClientConfig(
+                remote_server_addr=remote_url,
+                proxy=Proxy(raw={"proxyType": ProxyType.DIRECT}),
+            )
+        return webdriver.Remote(
+            command_executor=remote_url,
+            options=options,
+            client_config=client_config,
+        )
 
     def _opencv_available(self) -> bool:
         if cv2 is not None:
@@ -165,7 +188,9 @@ class WorkflowCrawler:
         if page_load_strategy not in {"normal", "eager", "none"}:
             page_load_strategy = "eager"
 
+        remote_url = self._get_remote_webdriver_url()
         print(f"[BROWSER] Creating {browser} options...")
+        print(f"[BROWSER] Using Selenium remote endpoint: {remote_url}")
         print(f"[BROWSER] Setting download directory: {self._download_dir}")
         Path(self._download_dir).mkdir(parents=True, exist_ok=True)
 
@@ -181,9 +206,6 @@ class WorkflowCrawler:
                 attach_existing = bool(
                     edge_cfg.get("attach_existing", self.config.get("edge_attach_existing", False))
                 )
-                debugger_address = str(
-                    edge_cfg.get("debugger_address", self.config.get("edge_debugger_address", ""))
-                ).strip()
                 edge_user_data_dir = str(
                     edge_cfg.get("user_data_dir", self.config.get("edge_user_data_dir", ""))
                 ).strip()
@@ -197,25 +219,24 @@ class WorkflowCrawler:
                     options.add_argument("--window-size=1600,1000")
                 else:
                     options.add_argument("--start-maximized")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
 
-                # Keep direct-launch behavior closer to a regular user browser profile.
-                # In attach mode, some experimental options are rejected by msedgedriver.
+                # Keep remote Edge capabilities container-safe; profile/bootstrap experiments
+                # can terminate the browser before Selenium finishes session creation.
                 if edge_stealth_mode and not attach_existing:
                     options.add_argument("--disable-blink-features=AutomationControlled")
                     options.add_argument("--disable-infobars")
                     options.add_argument("--disable-notifications")
                     options.add_argument("--no-default-browser-check")
                     options.add_argument("--no-first-run")
-                    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-                    options.add_experimental_option("useAutomationExtension", False)
 
+                if attach_existing:
+                    print("[BROWSER] Edge attach_existing is not supported in remote mode; setting ignored.")
                 if edge_user_data_dir and not attach_existing:
-                    try:
-                        Path(edge_user_data_dir).mkdir(parents=True, exist_ok=True)
-                    except Exception:
-                        pass
-                    options.add_argument(f"--user-data-dir={edge_user_data_dir}")
-                    print(f"[BROWSER] Edge direct mode using user data dir: {edge_user_data_dir}")
+                    print(
+                        f"[BROWSER] Edge user_data_dir is ignored in remote mode: {edge_user_data_dir}"
+                    )
 
                 for arg in edge_extra_args:
                     arg_str = str(arg).strip()
@@ -230,19 +251,8 @@ class WorkflowCrawler:
                     "credentials_enable_service": False,
                     "profile.password_manager_enabled": False,
                 })
-                if attach_existing:
-                    if not debugger_address:
-                        raise ValueError(
-                            "Edge attach mode requires debugger address via edge.debugger_address or edge_debugger_address"
-                        )
-                    options.add_experimental_option("debuggerAddress", debugger_address)
-                    print(f"[BROWSER] Edge attach mode enabled: debuggerAddress={debugger_address}")
-                self._attached_existing_browser = attach_existing
-
-                print("[BROWSER] Resolving msedgedriver...")
-                edge_exe = self._resolve_edgedriver_path()
-                service = EdgeService(edge_exe)
-                self.driver = webdriver.Edge(service=service, options=options)
+                self._attached_existing_browser = False
+                self.driver = self._create_remote_driver(remote_url, options)
             else:
                 options = Options()
                 options.page_load_strategy = page_load_strategy
@@ -267,10 +277,8 @@ class WorkflowCrawler:
                 options.set_preference("pdfjs.disabled", True)
                 options.set_preference("dom.webdriver.enabled", False)
 
-                print("[BROWSER] Resolving geckodriver...")
-                gecko_exe = self._resolve_geckodriver_path()
-                service = Service(gecko_exe)
-                self.driver = webdriver.Firefox(service=service, options=options)
+                self._attached_existing_browser = False
+                self.driver = self._create_remote_driver(remote_url, options)
 
             self._bootstrap_stealth_js()
             if not self.headless:
@@ -426,7 +434,7 @@ class WorkflowCrawler:
             _ = self.driver.current_url
 
     def _navigate_to_base_url(self) -> None:
-        """Navigate to base URL with retry for transient Firefox/geckodriver session loss."""
+        """Navigate to base URL with retry for transient remote WebDriver session loss."""
         url = self.config["base_url"]
         retry_count = int(self.config.get("startup_nav_retry", 1))
         max_attempts = max(1, retry_count + 1)
@@ -494,82 +502,6 @@ class WorkflowCrawler:
 
         if last_error:
             raise last_error
-
-    def _resolve_geckodriver_path(self) -> str:
-        """Resolve geckodriver path with local-first strategy for restricted networks."""
-        candidates: List[Path] = []
-
-        env_path = os.getenv("GECKODRIVER_PATH")
-        if env_path:
-            candidates.append(Path(env_path))
-
-        path_hit = shutil.which("geckodriver")
-        if path_hit:
-            candidates.append(Path(path_hit))
-
-        candidates.extend([
-            Path("geckodriver"),
-            Path("geckodriver.exe"),
-            Path("drivers") / "geckodriver",
-            Path("drivers") / "geckodriver.exe",
-            Path.home() / ".wdm" / "drivers" / "geckodriver" / "linux64" / "geckodriver",
-            Path.home() / ".wdm" / "drivers" / "geckodriver" / "win64" / "geckodriver.exe",
-        ])
-
-        cache_root = Path.home() / ".wdm" / "drivers" / "geckodriver"
-        if cache_root.exists():
-            for path in sorted(cache_root.glob("**/geckodriver*"), reverse=True):
-                candidates.append(path)
-
-        for candidate in candidates:
-            try:
-                resolved = candidate.resolve()
-            except Exception:
-                continue
-            if resolved.exists() and resolved.is_file():
-                print(f"[BROWSER] Using local geckodriver: {resolved}")
-                return str(resolved)
-
-        print("[BROWSER] No local geckodriver found, downloading via webdriver-manager...")
-        return GeckoDriverManager().install()
-
-    def _resolve_edgedriver_path(self) -> str:
-        """Resolve msedgedriver path with local-first strategy for restricted networks."""
-        candidates: List[Path] = []
-
-        env_path = os.getenv("MSEDGEDRIVER_PATH")
-        if env_path:
-            candidates.append(Path(env_path))
-
-        path_hit = shutil.which("msedgedriver")
-        if path_hit:
-            candidates.append(Path(path_hit))
-
-        candidates.extend([
-            Path("drivers") / "msedgedriver",
-            Path("drivers") / "msedgedriver.exe",
-            Path("msedgedriver"),
-            Path("msedgedriver.exe"),
-            Path.home() / ".wdm" / "drivers" / "edgedriver" / "linux64" / "msedgedriver",
-            Path.home() / ".wdm" / "drivers" / "edgedriver" / "win64" / "msedgedriver.exe",
-        ])
-
-        cache_root = Path.home() / ".wdm" / "drivers" / "edgedriver"
-        if cache_root.exists():
-            for path in sorted(cache_root.glob("**/msedgedriver*"), reverse=True):
-                candidates.append(path)
-
-        for candidate in candidates:
-            try:
-                resolved = candidate.resolve()
-            except Exception:
-                continue
-            if resolved.exists() and resolved.is_file():
-                print(f"[BROWSER] Using local msedgedriver: {resolved}")
-                return str(resolved)
-
-        print("[BROWSER] No local msedgedriver found, downloading via webdriver-manager...")
-        return EdgeChromiumDriverManager().install()
 
     def _login(self) -> None:
         login_cfg = self.config.get("login", {})

@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import time
 import traceback
@@ -373,9 +375,25 @@ def _run_input_timer_mode(
         )
 
         try:
-            # Launch batch script without blocking watcher loop.
+            if os.name == "nt":
+                if batch_path.suffix.lower() in {".bat", ".cmd"}:
+                    launch_cmd = ["cmd", "/c", str(batch_path), *batch_args]
+                else:
+                    launch_cmd = [str(batch_path), *batch_args]
+            else:
+                if batch_path.suffix.lower() == ".sh":
+                    launch_cmd = ["sh", str(batch_path), *batch_args]
+                elif batch_path.suffix.lower() in {".bat", ".cmd"}:
+                    print(
+                        f"[WATCH] browser_startup.batch_file is a Windows script and cannot run on this platform: {batch_path.name}"
+                    )
+                    return False
+                else:
+                    launch_cmd = [str(batch_path), *batch_args]
+
+            # Launch browser startup script without blocking watcher loop.
             subprocess.Popen(
-                ["cmd", "/c", str(batch_path), *batch_args],
+                launch_cmd,
                 cwd=str(project_root),
                 shell=False,
             )
@@ -393,7 +411,7 @@ def _run_input_timer_mode(
         site_done_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = site_done_dir / f"{src.stem}_{ts}{src.suffix}"
-        src.replace(dst)
+        shutil.move(str(src), str(dst))
         return dst
 
     def rename_failed_input_for_retry(src: Path) -> Path:
@@ -421,7 +439,7 @@ def _run_input_timer_mode(
             ts = candidate_dt.strftime("%Y%m%d_%H%M%S_%f")
             dst = folder / f"{stem_prefix}_{ts}{src.suffix}"
             if not dst.exists():
-                src.replace(dst)
+                shutil.move(str(src), str(dst))
                 return dst
             candidate_dt = datetime.fromtimestamp(candidate_dt.timestamp() + 1)
 
