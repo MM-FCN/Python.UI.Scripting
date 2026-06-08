@@ -8,7 +8,9 @@ import re
 import shutil
 import tempfile
 import time
+import requests
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -49,6 +51,14 @@ BY_MAP = {
 }
 
 
+class NoDataMatchedStop(Exception):
+    """Raised when fallback.no_data condition is matched and workflow should stop early."""
+
+
+class ManagedChallengeUnresolved(Exception):
+    """Raised when managed challenge cannot be cleared automatically."""
+
+
 class WorkflowCrawler:
     def __init__(self, config: Dict[str, Any], headless: bool = False, params: Dict[str, str] = None) -> None:
         self.config = config
@@ -64,6 +74,102 @@ class WorkflowCrawler:
         )
         self.popup_data: List[Dict[str, Any]] = []  # 存储从弹出框爬取的数据
         self._current_task_name: str = ""
+        self._active_scrape_cfg: Dict[str, Any] = {}
+        self._challenge_debug_enabled: bool = False
+        self._challenge_debug_file: Optional[Path] = None
+        self._init_challenge_debug()
+
+    def _init_challenge_debug(self) -> None:
+        captcha_cfg = self.config.get("login", {}).get("captcha", {})
+        if not isinstance(captcha_cfg, dict):
+            return
+        debug_cfg = captcha_cfg.get("debug", {})
+        if not isinstance(debug_cfg, dict):
+            return
+        enabled = bool(debug_cfg.get("enabled", False))
+        if not enabled:
+            return
+
+        root = Path(str(debug_cfg.get("dir", "output/challenge-debug"))).resolve()
+        bucket = root / time.strftime("%Y-%m")
+        bucket.mkdir(parents=True, exist_ok=True)
+        file_name = f"challenge_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.jsonl"
+        self._challenge_debug_file = bucket / file_name
+        self._challenge_debug_enabled = True
+        print(f"[CAPTCHA][DEBUG] Writing challenge debug events to: {self._challenge_debug_file}")
+
+    def _challenge_token_len(self) -> int:
+        if not self.driver:
+            return 0
+        try:
+            token = self.driver.execute_script(
+                """
+                const el = document.querySelector("input[name='cf-turnstile-response'], input[id*='_response']");
+                return el ? (el.value || '') : '';
+                """
+            )
+            return len(token or "")
+        except Exception:
+            return 0
+
+    def _challenge_iframe_count(self) -> int:
+        if not self.driver:
+            return 0
+        try:
+            selectors = [
+                "iframe[src*='challenge-platform']",
+                "iframe[src*='turnstile']",
+                "iframe[src*='challenges.cloudflare.com']",
+                "iframe[title*='challenge']",
+            ]
+            total = 0
+            for sel in selectors:
+                try:
+                    total += len(self.driver.find_elements(By.CSS_SELECTOR, sel))
+                except Exception:
+                    continue
+            return total
+        except Exception:
+            return 0
+
+    def _is_managed_challenge_page(self) -> bool:
+        if not self.driver:
+            return False
+        try:
+            markers = [
+                ".hal-container-header",
+                "script[src*='challenge-platform']",
+                "input[name='cf-turnstile-response']",
+                "input[id*='_response']",
+            ]
+            for marker in markers:
+                if self.driver.find_elements(By.CSS_SELECTOR, marker):
+                    return True
+            page_html = (self.driver.page_source or "").lower()
+            if "managed challenge" in page_html or "_cf_chl_opt" in page_html:
+                return True
+            current_url = (self._safe_current_url() or "").lower()
+            return "__cf_chl" in current_url
+        except Exception:
+            return False
+
+    def _log_challenge_event(self, event: str, **data: Any) -> None:
+        if not self._challenge_debug_enabled or not self._challenge_debug_file:
+            return
+        payload = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "event": event,
+            "url": self._safe_current_url(),
+            "managed_challenge": self._is_managed_challenge_page(),
+            "token_len": self._challenge_token_len(),
+            "iframe_count": self._challenge_iframe_count(),
+        }
+        payload.update(data)
+        try:
+            with self._challenge_debug_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def _get_output_retention_days(self) -> int:
         output_cfg = self.config.get("output", {})
@@ -102,6 +208,7 @@ class WorkflowCrawler:
                 self._navigate_to_base_url()
             else:
                 print("[STEP 2] Startup navigation skipped by config.")
+            self._bootstrap_flaresolverr_cookies()
             print("[STEP 3] Executing login...")
             self._login()
 
@@ -111,9 +218,20 @@ class WorkflowCrawler:
                 records = self._run_tasks(tasks)
             else:
                 print("[STEP 4] Performing navigation steps...")
-                self._perform_steps(self.config.get("navigation_steps", []))
-                print("[STEP 5] Scraping records...")
-                records = self._scrape_records()
+                try:
+                    self._active_scrape_cfg = self.config.get("scrape", {}) if isinstance(self.config.get("scrape", {}), dict) else {}
+                    self._perform_steps(self.config.get("navigation_steps", []))
+                    if self._is_fallback_no_data_matched():
+                        print("[FALLBACK] no_data matched before scraping, skip scrape and save empty result.")
+                        records = []
+                    else:
+                        print("[STEP 5] Scraping records...")
+                        records = self._scrape_records()
+                except NoDataMatchedStop as e:
+                    print(f"[FALLBACK] {e}; stop flow early and save empty result.")
+                    records = []
+                finally:
+                    self._active_scrape_cfg = {}
                 print("[STEP 6] Saving records...")
                 self._save_records(records)
             print("[SUCCESS] Crawler completed!")
@@ -134,6 +252,147 @@ class WorkflowCrawler:
             else:
                 self._cleanup_runtime_edge_profile_dir()
 
+    def _bootstrap_flaresolverr_cookies(self) -> None:
+        cfg = self.config.get("flaresolverr", {})
+        if not isinstance(cfg, dict) or not bool(cfg.get("enabled", False)):
+            return
+
+        endpoint = str(cfg.get("endpoint", "http://localhost:8191/v1")).strip()
+        if not endpoint:
+            print("[FS] FlareSolverr enabled but endpoint is empty, skip.")
+            return
+
+        target_url = str(cfg.get("url", self.config.get("base_url", ""))).strip()
+        warmup_urls_cfg = cfg.get("warmup_urls", [])
+        warmup_urls: List[str] = []
+        if isinstance(warmup_urls_cfg, list):
+            warmup_urls = [str(u).strip() for u in warmup_urls_cfg if str(u).strip()]
+        elif isinstance(warmup_urls_cfg, str):
+            warmup_urls = [u.strip() for u in warmup_urls_cfg.split(",") if u.strip()]
+
+        solve_urls = warmup_urls + ([target_url] if target_url else [])
+        if not solve_urls:
+            print("[FS] FlareSolverr target URL is empty, skip.")
+            return
+
+        cmd = str(cfg.get("cmd", "request.get")).strip() or "request.get"
+        max_timeout = max(1000, int(cfg.get("max_timeout", 60000) or 60000))
+        request_timeout = max(1, int(cfg.get("request_timeout", 75) or 75))
+
+        payload: Dict[str, Any] = {
+            "cmd": cmd,
+            "url": target_url,
+            "maxTimeout": max_timeout,
+        }
+        session_ttl = int(cfg.get("session_ttl_minutes", 0) or 0)
+        if session_ttl > 0:
+            payload["session"] = str(cfg.get("session_id", "hapag"))
+            payload["session_ttl_minutes"] = session_ttl
+
+        cookies: List[Dict[str, Any]] = []
+        html = ""
+        solved_url = ""
+        for idx, url in enumerate(solve_urls, start=1):
+            one_payload = dict(payload)
+            one_payload["url"] = url
+            print(f"[FS] Solving challenge via FlareSolverr ({idx}/{len(solve_urls)}): {url}")
+            try:
+                resp = requests.post(endpoint, json=one_payload, timeout=request_timeout)
+                result = resp.json() if resp.content else {}
+            except Exception as e:
+                print(f"[FS] Request failed on {url}: {type(e).__name__}: {e}")
+                return
+
+            if result.get("status") != "ok":
+                print(f"[FS] Solve failed on {url}: {result.get('message', 'unknown error')}")
+                return
+
+            solution = result.get("solution", {}) if isinstance(result.get("solution", {}), dict) else {}
+            cookies = solution.get("cookies", []) if isinstance(solution.get("cookies", []), list) else []
+            html = str(solution.get("response", "") or "")
+            solved_url = url
+
+        if not cookies:
+            print("[FS] Solve returned no cookies, skip cookie bootstrap.")
+            return
+
+        challenge_markers = [
+            "_cf_chl_opt",
+            "challenge-platform",
+            "interactive challenge",
+            "verify you are human",
+        ]
+        if html and any(marker in html.lower() for marker in challenge_markers):
+            print("[FS] Warning: response still looks like challenge page; applying cookies anyway.")
+
+        if self._apply_external_cookies(target_url, cookies):
+            print(f"[FS] Applied {len(cookies)} cookies into browser session.")
+            cookie_file = str(cfg.get("cookie_file", "")).strip()
+            if cookie_file:
+                self._save_external_cookie_file(cookie_file, cookies)
+            if bool(cfg.get("navigate_after_apply", True)):
+                try:
+                    self.driver.get(target_url)
+                    print(f"[FS] Navigated back to target URL after cookie apply: {target_url}")
+                except Exception as e:
+                    print(f"[FS] Failed to navigate to target URL after cookie apply: {type(e).__name__}: {e}")
+
+    def _apply_external_cookies(self, target_url: str, cookies: List[Dict[str, Any]]) -> bool:
+        if not self.driver:
+            return False
+
+        parsed = urlparse(target_url)
+        if not parsed.scheme or not parsed.netloc:
+            return False
+        origin = f"{parsed.scheme}://{parsed.netloc}/"
+
+        try:
+            self.driver.get(origin)
+            self._override_navigator_webdriver()
+        except Exception as e:
+            print(f"[FS] Failed to open cookie origin {origin}: {type(e).__name__}: {e}")
+            return False
+
+        added = 0
+        for raw in cookies:
+            if not isinstance(raw, dict):
+                continue
+            cookie = dict(raw)
+            # Selenium add_cookie accepts a strict subset.
+            allowed_keys = {"name", "value", "path", "domain", "secure", "httpOnly", "expiry", "sameSite"}
+            cookie = {k: v for k, v in cookie.items() if k in allowed_keys}
+            if not cookie.get("name"):
+                continue
+            if "expiry" in cookie:
+                try:
+                    cookie["expiry"] = int(cookie["expiry"])
+                except Exception:
+                    cookie.pop("expiry", None)
+            try:
+                self.driver.add_cookie(cookie)
+                added += 1
+            except Exception:
+                continue
+
+        if added <= 0:
+            print("[FS] No cookies were accepted by browser.")
+            return False
+
+        try:
+            self.driver.refresh()
+        except Exception:
+            pass
+        return True
+
+    def _save_external_cookie_file(self, cookie_file: str, cookies: List[Dict[str, Any]]) -> None:
+        try:
+            path = Path(cookie_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(cookies, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"[FS] Cookies saved to {cookie_file}")
+        except Exception as e:
+            print(f"[FS] Failed to save cookie file: {type(e).__name__}: {e}")
+
     def _run_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """在同一登录会话中顺序执行多个页面任务。"""
         all_records: List[Dict[str, Any]] = []
@@ -149,11 +408,18 @@ class WorkflowCrawler:
 
             self.config["scrape"] = task.get("scrape", base_scrape)
             self.config["output"] = task.get("output", base_output)
+            self._active_scrape_cfg = self.config["scrape"] if isinstance(self.config["scrape"], dict) else {}
 
             nav_steps = task.get("navigation_steps", self.config.get("navigation_steps", []))
             print(f"[TASK {idx}] navigation steps: {len(nav_steps)}")
             try:
                 self._perform_steps(nav_steps)
+
+                if self._is_fallback_no_data_matched():
+                    print("[FALLBACK] no_data matched before scraping, skip scrape and save empty result.")
+                    records = []
+                    self._save_records(records)
+                    continue
 
                 records = self._scrape_records()
                 self._save_records(records)
@@ -164,12 +430,18 @@ class WorkflowCrawler:
                     f"[TASK {idx}] {task_name} completed, records={len(task_records)} "
                     f"(popup_records={len(self.popup_data)}, list_records={len(records)})"
                 )
+            except NoDataMatchedStop as e:
+                print(f"[FALLBACK] {e}; stop current task early and save empty result.")
+                records = []
+                self._save_records(records)
+                continue
             except Exception as e:
                 print(f"[ERROR] Task '{task_name}' failed: {type(e).__name__}: {e}")
                 print(f"[ERROR] URL when task failed: {self._safe_current_url()}")
                 raise
 
         self._current_task_name = ""
+        self._active_scrape_cfg = {}
 
         self.config["scrape"] = base_scrape
         self.config["output"] = base_output
@@ -199,7 +471,7 @@ class WorkflowCrawler:
                 edge_stealth_mode = bool(edge_cfg.get("stealth_mode", True))
                 edge_headless_stealth = bool(edge_cfg.get("headless_stealth_enabled", True))
                 edge_accept_language = str(
-                    edge_cfg.get("accept_language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+                    edge_cfg.get("accept_language", "en-US,en;q=0.9")
                 ).strip()
                 attach_existing = bool(
                     edge_cfg.get("attach_existing", self.config.get("edge_attach_existing", False))
@@ -362,11 +634,46 @@ class WorkflowCrawler:
             print(f"[BROWSER] about:blank bootstrap skipped: {type(e).__name__}: {e}")
         self._override_navigator_webdriver()
 
+    def _resolve_external_stealth_js_path(self) -> Optional[Path]:
+        edge_cfg = self.config.get("edge", {})
+        configured_path = ""
+        if isinstance(edge_cfg, dict):
+            configured_path = str(edge_cfg.get("stealth_js_path", "")).strip()
+
+        project_root = Path(__file__).resolve().parents[2]
+        candidates: List[Path] = []
+        if configured_path:
+            p = Path(configured_path)
+            if not p.is_absolute():
+                p = (project_root / p).resolve()
+            candidates.append(p)
+
+        # Default to src/stealth.min.js used by test.py.
+        candidates.append((Path(__file__).resolve().parents[1] / "stealth.min.js").resolve())
+
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        return None
+
+    def _load_external_stealth_js(self) -> str:
+        path = self._resolve_external_stealth_js_path()
+        if not path:
+            return ""
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+            if content:
+                print(f"[BROWSER] External stealth JS loaded: {path}")
+                return content
+        except Exception as e:
+            print(f"[BROWSER] External stealth JS load skipped: {type(e).__name__}: {e}")
+        return ""
+
     def _install_cdp_stealth_script(self) -> None:
         """Install CDP script so stealth overrides run before every new document."""
         if not self.driver:
             return
-        script = """
+        built_in_script = """
             // webdriver
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined,
@@ -388,7 +695,7 @@ class WorkflowCrawler:
 
             // languages
             Object.defineProperty(navigator, 'languages', {
-                get: () => ['zh-CN', 'en-US', 'ja-JP'],
+                get: () => ['en-US', 'en'],
                 configurable: true
             });
 
@@ -434,6 +741,10 @@ class WorkflowCrawler:
                 });
             }
         """
+        external_script = self._load_external_stealth_js()
+        script = built_in_script
+        if external_script:
+            script = f"{external_script}\n\n{built_in_script}"
         try:
             self.driver.execute_cdp_cmd(
                 "Page.addScriptToEvaluateOnNewDocument",
@@ -449,7 +760,7 @@ class WorkflowCrawler:
             return
 
         accept_language = str(
-            edge_cfg.get("accept_language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+            edge_cfg.get("accept_language", "en-US,en;q=0.9")
         ).strip()
         platform = str(edge_cfg.get("platform", "Win32")).strip() or "Win32"
         timezone = str(edge_cfg.get("timezone", "")).strip()
@@ -509,7 +820,7 @@ class WorkflowCrawler:
 
             try {
                 Object.defineProperty(navigator, 'languages', {
-                    get: () => ['zh-CN', 'zh', 'en-US', 'en'],
+                    get: () => ['en-US', 'en'],
                     configurable: true
                 });
             } catch (_) {}
@@ -571,6 +882,19 @@ class WorkflowCrawler:
             if not handles:
                 raise RuntimeError("Browser context recovery failed: no window handles after restart")
             _ = self.driver.current_url
+
+            if bool(self.config.get("recover_navigate_base_url", True)):
+                try:
+                    base_url = str(self.config.get("base_url", "")).strip()
+                    if base_url:
+                        self.driver.get(base_url)
+                        self._override_navigator_webdriver()
+                        print(f"[BROWSER] Context recovered{marker}; navigated to base URL.")
+                except Exception as nav_err:
+                    print(
+                        f"[BROWSER] Context recovered{marker} but base navigation failed: "
+                        f"{type(nav_err).__name__}: {nav_err}"
+                    )
 
     def _navigate_to_base_url(self) -> None:
         """Navigate to base URL with retry for transient Firefox/geckodriver session loss."""
@@ -882,12 +1206,18 @@ class WorkflowCrawler:
             for frame in frames:
                 try:
                     self.driver.switch_to.default_content()
+                    try:
+                        if not frame.is_displayed():
+                            continue
+                    except Exception:
+                        pass
                     self.driver.switch_to.frame(frame)
                     if not probe_selectors:
                         print(f"[CAPTCHA] Switched to iframe via selector: {sel}")
                         return True
                     for p in probe_selectors:
-                        if self.driver.find_elements(By.CSS_SELECTOR, p):
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, p)
+                        if any(el.is_displayed() for el in elements):
                             print(f"[CAPTCHA] Switched to captcha iframe via selector: {sel}")
                             return True
                 except Exception:
@@ -1182,6 +1512,8 @@ class WorkflowCrawler:
         popup_selectors = self._cfg_selectors(cfg, "popup_selector")
         success_selectors = self._cfg_selectors(cfg, "success_selector")
         max_retries = max(1, int(cfg.get("checkbox_retries", 2)))
+        monitor_seconds = max(1.0, float(cfg.get("checkbox_monitor_seconds", 8.0) or 8.0))
+        retry_interval = max(0.2, float(cfg.get("checkbox_retry_interval_seconds", 0.8) or 0.8))
 
         if not checkbox_selectors:
             checkbox_selectors = [
@@ -1195,46 +1527,376 @@ class WorkflowCrawler:
         for attempt in range(1, max_retries + 1):
             try:
                 self._switch_to_captcha_iframe(cfg, probe_selectors=probe_selectors)
+                end_time = time.time() + monitor_seconds
+                self._log_challenge_event(
+                    "checkbox_attempt_start",
+                    attempt=attempt,
+                    max_retries=max_retries,
+                    monitor_seconds=monitor_seconds,
+                )
+                while time.time() < end_time:
+                    # Success condition 1: success marker appears.
+                    if success_selectors:
+                        for success_sel in success_selectors:
+                            try:
+                                elements = self.driver.find_elements(By.CSS_SELECTOR, success_sel)
+                                if any(el.is_displayed() for el in elements):
+                                    print(f"[CAPTCHA] Checkbox verification success marker found: {success_sel}")
+                                    self._log_challenge_event(
+                                        "checkbox_success_marker",
+                                        attempt=attempt,
+                                        selector=success_sel,
+                                    )
+                                    return
+                            except Exception:
+                                continue
 
-                clicked = False
-                for sel in checkbox_selectors:
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                    for el in elements:
-                        try:
-                            if el.is_displayed() and el.is_enabled():
-                                self.driver.execute_script("arguments[0].click();", el)
+                    # Success condition 2: popup container is no longer visible.
+                    if popup_selectors:
+                        popup_visible = False
+                        for popup_sel in popup_selectors:
+                            try:
+                                popup_elems = self.driver.find_elements(By.CSS_SELECTOR, popup_sel)
+                                if any(el.is_displayed() for el in popup_elems):
+                                    popup_visible = True
+                                    break
+                            except Exception:
+                                continue
+                        if not popup_visible:
+                            print("[CAPTCHA] Checkbox popup disappeared, continue workflow.")
+                            self._log_challenge_event(
+                                "checkbox_popup_disappeared",
+                                attempt=attempt,
+                            )
+                            return
+
+                    clicked = False
+                    for sel in checkbox_selectors:
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                        for el in elements:
+                            try:
+                                if not el.is_displayed():
+                                    continue
+                                try:
+                                    self.driver.execute_script(
+                                        "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                                        el,
+                                    )
+                                except Exception:
+                                    pass
+
+                                try:
+                                    ActionChains(self.driver).move_to_element(el).pause(0.05).click(el).perform()
+                                except Exception:
+                                    self.driver.execute_script("arguments[0].click();", el)
+
+                                # For Turnstile, clicking the parent label often works better than input itself.
+                                try:
+                                    self.driver.execute_script(
+                                        "const n=arguments[0]; const lb=n.closest('label'); if (lb) lb.click();",
+                                        el,
+                                    )
+                                except Exception:
+                                    pass
+
                                 print(f"[CAPTCHA] Checkbox clicked via selector: {sel}")
+                                self._log_challenge_event(
+                                    "checkbox_clicked",
+                                    attempt=attempt,
+                                    selector=sel,
+                                )
                                 clicked = True
                                 break
-                        except Exception:
-                            continue
+                            except Exception:
+                                continue
+                        if clicked:
+                            break
+
+                    # Checked state is a useful intermediate signal; continue monitoring because
+                    # Cloudflare may require another click/challenge pass.
                     if clicked:
-                        break
-
-                if not clicked:
-                    print(f"[CAPTCHA] Checkbox not found/clickable (attempt {attempt}/{max_retries})")
-                    time.sleep(0.8)
-                    continue
-
-                time.sleep(1.2)
-
-                # If a success marker is configured, wait briefly for confirmation.
-                if success_selectors:
-                    for success_sel in success_selectors:
                         try:
-                            self._wait_visible("css", success_sel, timeout=3)
-                            print(f"[CAPTCHA] Checkbox verification success marker found: {success_sel}")
-                            return
+                            checked_inputs = self.driver.find_elements(By.CSS_SELECTOR, "#content input[type='checkbox']:checked")
+                            if checked_inputs:
+                                print("[CAPTCHA] Checkbox checked state detected, keep monitoring...")
+                                self._log_challenge_event(
+                                    "checkbox_checked_state",
+                                    attempt=attempt,
+                                )
                         except Exception:
-                            continue
+                            pass
+                    else:
+                        print(f"[CAPTCHA] Checkbox not found/clickable yet (attempt {attempt}/{max_retries})")
+                        self._log_challenge_event(
+                            "checkbox_not_found",
+                            attempt=attempt,
+                        )
 
-                # No explicit success marker configured/found; click was issued, continue workflow.
-                return
+                    time.sleep(retry_interval)
             except Exception as e:
                 print(f"[CAPTCHA] Checkbox solve attempt {attempt} error: {type(e).__name__}: {e}")
+                self._log_challenge_event(
+                    "checkbox_attempt_error",
+                    attempt=attempt,
+                    error_type=type(e).__name__,
+                    error=str(e),
+                )
                 time.sleep(0.8)
 
         print("[CAPTCHA] Checkbox captcha not solved after retries; continue workflow.")
+
+    def _handle_managed_challenge(self, cfg: Dict[str, Any], context: str = "") -> bool:
+        """Best-effort handling for Cloudflare managed challenge pages."""
+        wait_seconds = max(3.0, float(cfg.get("managed_wait_seconds", 12.0) or 12.0))
+        poll_interval = max(0.3, float(cfg.get("managed_poll_interval_seconds", 0.8) or 0.8))
+        refresh_retries = max(0, int(cfg.get("managed_refresh_retries", 1) or 1))
+
+        marker = f" ({context})" if context else ""
+        self._log_challenge_event(
+            "managed_challenge_detected",
+            context=context,
+            wait_seconds=wait_seconds,
+            refresh_retries=refresh_retries,
+        )
+
+        for attempt in range(1, refresh_retries + 2):
+            print(
+                f"[CAPTCHA] Managed challenge detected{marker}. "
+                f"Waiting for auto-pass ({attempt}/{refresh_retries + 1})..."
+            )
+            end_time = time.time() + wait_seconds
+            while time.time() < end_time:
+                managed = self._is_managed_challenge_page()
+                token_len = self._challenge_token_len()
+                current_url = (self._safe_current_url() or "").lower()
+                if not managed and "__cf_chl" not in current_url:
+                    print(f"[CAPTCHA] Managed challenge cleared{marker}, continue workflow.")
+                    self._log_challenge_event(
+                        "managed_challenge_cleared",
+                        context=context,
+                        attempt=attempt,
+                        token_len=token_len,
+                    )
+                    return True
+
+                clicked = self._attempt_managed_challenge_click(cfg)
+                if clicked:
+                    self._log_challenge_event(
+                        "managed_challenge_click",
+                        context=context,
+                        attempt=attempt,
+                    )
+                time.sleep(poll_interval)
+
+            if attempt <= refresh_retries:
+                print(f"[CAPTCHA] Managed challenge still active{marker}, refreshing page and retrying...")
+                self._log_challenge_event(
+                    "managed_challenge_refresh",
+                    context=context,
+                    attempt=attempt,
+                )
+                try:
+                    self.driver.refresh()
+                except Exception as e:
+                    self._log_challenge_event(
+                        "managed_challenge_refresh_error",
+                        context=context,
+                        attempt=attempt,
+                        error_type=type(e).__name__,
+                        error=str(e),
+                    )
+                time.sleep(1.0)
+
+        print(f"[CAPTCHA] Managed challenge unresolved{marker}; fail current task.")
+        self._log_challenge_event(
+            "managed_challenge_unresolved",
+            context=context,
+        )
+        raise ManagedChallengeUnresolved(
+            f"Managed challenge unresolved{marker}; aborting to avoid false allow_empty result"
+        )
+
+    def _attempt_managed_challenge_click(self, cfg: Dict[str, Any]) -> bool:
+        """Try clicking visible verify/checkbox controls in default content and challenge iframe."""
+        clicked = False
+        verify_xpaths = cfg.get("managed_verify_xpaths", [])
+        if not isinstance(verify_xpaths, list) or not verify_xpaths:
+            verify_xpaths = [
+                "//span[contains(normalize-space(), 'Verify you are human')]/ancestor::label",
+                "//label[.//span[contains(normalize-space(), 'Verify you are human')]]",
+                "//div[@id='content']//label[contains(@class,'cb-lb')]",
+                "//div[@id='content']//input[@type='checkbox']",
+                "//input[@type='checkbox' or @role='checkbox']",
+            ]
+
+        checkbox_selectors = self._cfg_selectors(cfg, "checkbox_selector")
+        popup_selectors = self._cfg_selectors(cfg, "popup_selector")
+        probe_selectors = list(dict.fromkeys(checkbox_selectors + popup_selectors))
+
+        def _click_targets(in_iframe: bool = False) -> bool:
+            local_clicked = False
+            for xp in verify_xpaths:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, xp)
+                except Exception:
+                    continue
+                for el in elements:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                        try:
+                            self.driver.execute_script(
+                                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                                el,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            ActionChains(self.driver).move_to_element(el).pause(0.05).click(el).perform()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", el)
+                        print(f"[CAPTCHA] Managed verify clicked via xpath: {xp}")
+                        local_clicked = True
+                        break
+                    except Exception:
+                        continue
+                if local_clicked:
+                    break
+
+            if local_clicked:
+                return True
+
+            for sel in checkbox_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                except Exception:
+                    continue
+                for el in elements:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                        try:
+                            self.driver.execute_script(
+                                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                                el,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            ActionChains(self.driver).move_to_element(el).pause(0.05).click(el).perform()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", el)
+                        print(
+                            f"[CAPTCHA] Managed verify clicked via css: {sel}"
+                            f"{' (iframe)' if in_iframe else ''}"
+                        )
+                        return True
+                    except Exception:
+                        continue
+
+                        # Some challenge widgets render controls under shadow DOM.
+                        try:
+                                clicked_shadow = bool(
+                                        self.driver.execute_script(
+                                                """
+                                                const selectors = arguments[0] || [];
+                                                const isVisible = (el) => {
+                                                    if (!el) return false;
+                                                    const st = window.getComputedStyle(el);
+                                                    if (!st) return false;
+                                                    const r = el.getBoundingClientRect();
+                                                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 0 && r.height > 0;
+                                                };
+                                                const clickInRoot = (root) => {
+                                                    for (const sel of selectors) {
+                                                        const el = root.querySelector(sel);
+                                                        if (el && isVisible(el)) {
+                                                            try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e) {}
+                                                            try { el.click(); return true; } catch(e) {}
+                                                        }
+                                                    }
+                                                    const nodes = root.querySelectorAll('*');
+                                                    for (const n of nodes) {
+                                                        if (n && n.shadowRoot && clickInRoot(n.shadowRoot)) return true;
+                                                    }
+                                                    return false;
+                                                };
+                                                return clickInRoot(document);
+                                                """,
+                                                [
+                                                        "label.cb-lb",
+                                                        "input[type='checkbox']",
+                                                        "span.cb-lb-t",
+                                                        "[role='checkbox']",
+                                                ],
+                                        )
+                                )
+                                if clicked_shadow:
+                                        print(
+                                                "[CAPTCHA] Managed verify clicked via shadow DOM"
+                                                f"{' (iframe)' if in_iframe else ''}"
+                                        )
+                                        return True
+                        except Exception:
+                                pass
+            return False
+
+        try:
+            try:
+                self.driver.switch_to.default_content()
+            except Exception:
+                pass
+            clicked = _click_targets(in_iframe=False)
+
+            if clicked:
+                return True
+
+            in_iframe = False
+            try:
+                in_iframe = self._switch_to_captcha_iframe(cfg, probe_selectors=probe_selectors)
+                if in_iframe:
+                    clicked = _click_targets(in_iframe=True)
+            finally:
+                if in_iframe:
+                    try:
+                        self.driver.switch_to.default_content()
+                    except Exception:
+                        pass
+
+            if clicked:
+                return True
+
+            # Last resort: scan all iframes because challenge widget frame may vary by build.
+            try:
+                frames = self.driver.find_elements(By.TAG_NAME, "iframe")
+            except Exception:
+                frames = []
+
+            for idx in range(len(frames)):
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
+                try:
+                    frames = self.driver.find_elements(By.TAG_NAME, "iframe")
+                    if idx >= len(frames):
+                        continue
+                    self.driver.switch_to.frame(frames[idx])
+                    if _click_targets(in_iframe=True):
+                        print(f"[CAPTCHA] Managed verify clicked in iframe index={idx}")
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+                finally:
+                    try:
+                        self.driver.switch_to.default_content()
+                    except Exception:
+                        pass
+        except Exception:
+            return False
+
+        return clicked
 
     def _handle_captcha_if_exists(self, cfg: Dict[str, Any], context: str = "") -> bool:
         """Check captcha quickly and solve only when slider/popup is present."""
@@ -1261,6 +1923,16 @@ class WorkflowCrawler:
         detected = False
         in_iframe = False
         try:
+            self._log_challenge_event(
+                "captcha_probe",
+                context=context,
+                captcha_type=captcha_type,
+                probe_selector_count=len(probe_selectors),
+            )
+
+            if self._is_managed_challenge_page():
+                return self._handle_managed_challenge(cfg, context=context)
+
             in_iframe = self._switch_to_captcha_iframe(cfg, probe_selectors=probe_selectors)
 
             for sel in probe_selectors:
@@ -1284,8 +1956,19 @@ class WorkflowCrawler:
 
             if detected:
                 marker = f" ({context})" if context else ""
-                print(f"[CAPTCHA] Detected slider captcha{marker}, handling now...")
+                detected_kind = "checkbox" if captcha_type == "checkbox" else "slider"
+                print(f"[CAPTCHA] Detected {detected_kind} captcha{marker}, handling now...")
+                self._log_challenge_event(
+                    "captcha_detected",
+                    context=context,
+                    captcha_type=detected_kind,
+                )
                 self._handle_captcha(cfg)
+                self._log_challenge_event(
+                    "captcha_handle_done",
+                    context=context,
+                    captcha_type=detected_kind,
+                )
                 return True
             return False
         finally:
@@ -1311,6 +1994,8 @@ class WorkflowCrawler:
             return False
         try:
             return self._handle_captcha_if_exists(captcha_cfg, context=context)
+        except ManagedChallengeUnresolved:
+            raise
         except Exception as e:
             marker = f" ({context})" if context else ""
             print(f"[CAPTCHA] Auto check skipped due to error{marker}: {type(e).__name__}: {e}")
@@ -1377,6 +2062,59 @@ class WorkflowCrawler:
                 return bool(page_text and txt in page_text)
         except Exception:
             return False
+        return False
+
+    def _is_fallback_no_data_matched(self) -> bool:
+        """Check fallback.no_data rule from site config and return True once matched."""
+        if not self.driver:
+            return False
+
+        fallback_cfg = self.config.get("fallback", {})
+        if not isinstance(fallback_cfg, dict):
+            return False
+        no_data_cfg = fallback_cfg.get("no_data", {})
+        if not isinstance(no_data_cfg, dict):
+            return False
+
+        # 1) Check configured no-data selectors in scrape config (strong signal).
+        scrape_cfg = self._active_scrape_cfg if isinstance(self._active_scrape_cfg, dict) else self.config.get("scrape", {})
+        no_data_selectors: List[str] = []
+        if isinstance(scrape_cfg, dict):
+            raw_no_data_selectors = scrape_cfg.get("no_data_selectors", [])
+            if isinstance(raw_no_data_selectors, str):
+                no_data_selectors = [s.strip() for s in raw_no_data_selectors.split(",") if s.strip()]
+            elif isinstance(raw_no_data_selectors, list):
+                no_data_selectors = [str(s).strip() for s in raw_no_data_selectors if str(s).strip()]
+
+        for sel in no_data_selectors:
+            try:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                if any(el.is_displayed() for el in elements):
+                    print(f"[FALLBACK] no_data matched by selector: {sel}")
+                    return True
+            except Exception:
+                continue
+
+        # 2) Check page text against fallback.no_data.text_contains.
+        raw_text_contains = no_data_cfg.get("text_contains", [])
+        text_needles: List[str] = []
+        if isinstance(raw_text_contains, str):
+            text_needles = [s.strip().lower() for s in raw_text_contains.split(",") if s.strip()]
+        elif isinstance(raw_text_contains, list):
+            text_needles = [str(s).strip().lower() for s in raw_text_contains if str(s).strip()]
+
+        if text_needles:
+            page_text = ""
+            try:
+                page_text = (self.driver.find_element(By.TAG_NAME, "body").text or "").lower()
+            except Exception:
+                page_text = ""
+
+            for needle in text_needles:
+                if needle and needle in page_text:
+                    print(f"[FALLBACK] no_data matched by text: {needle}")
+                    return True
+
         return False
 
     def _wait_visible_with_captcha_watch(
@@ -1850,15 +2588,21 @@ class WorkflowCrawler:
             selector = runtime_step.get("selector", "")
             print(f"[STEP {i}] action={action}, by={by}, selector={selector}")
             try:
+                if self._is_fallback_no_data_matched():
+                    raise NoDataMatchedStop("fallback.no_data matched before step execution")
                 self._ensure_browser_context(context=f"before step {i} ({action})")
                 if auto_check_captcha:
                     self._handle_captcha_if_exists(captcha_cfg, context=f"before step {i} ({action})")
                 if isinstance(next_step, dict):
                     runtime_step["_next_step"] = next_step
                 self._do_action(runtime_step)
+                if self._is_fallback_no_data_matched():
+                    raise NoDataMatchedStop("fallback.no_data matched after step execution")
                 if auto_check_captcha:
                     self._handle_captcha_if_exists(captcha_cfg, context=f"after step {i} ({action})")
                 print(f"[STEP {i}] action={action} done")
+            except NoDataMatchedStop:
+                raise
             except Exception as e:
                 print(f"[ERROR] Step {i} failed: action={action}, err={type(e).__name__}: {e}")
                 print(f"[ERROR] Step context URL: {self._safe_current_url()}")
@@ -1952,13 +2696,20 @@ class WorkflowCrawler:
                 max_rounds = max(1, int(step.get("max_rounds", 1)))
                 check_next_on_timeout = bool(step.get("check_next_on_timeout", False))
                 next_check_timeout = float(step.get("next_check_timeout", 1.5))
+                post_click_invisible_by = str(step.get("post_click_invisible_by", step.get("by", ""))).strip()
+                post_click_invisible_selector = str(step.get("post_click_invisible_selector", "")).strip()
+                post_click_invisible_timeout = float(step.get("post_click_invisible_timeout", 0))
                 clicked = False
+                total_matches_seen = 0
 
                 for round_idx in range(1, max_rounds + 1):
                     end_time = time.time() + max(0.0, timeout)
+                    round_seen = 0
                     while True:
                         self._auto_check_captcha(context=f"during click_if_exists ({selector})")
                         elements = self.driver.find_elements(by, selector)
+                        round_seen += len(elements)
+                        total_matches_seen += len(elements)
                         for el in elements:
                             try:
                                 # Some transient overlays/buttons are visible but not strictly "enabled".
@@ -1977,8 +2728,26 @@ class WorkflowCrawler:
                                     except Exception:
                                         self.driver.execute_script("arguments[0].click();", el)
 
-                                    print(f"[STEP] click_if_exists clicked: {selector}")
-                                    clicked = True
+                                    if post_click_invisible_selector:
+                                        try:
+                                            self._wait_invisible_with_captcha_watch(
+                                                post_click_invisible_by or step.get("by", "css"),
+                                                post_click_invisible_selector,
+                                                timeout=max(0.2, post_click_invisible_timeout),
+                                                context=f"click_if_exists post-click invisible ({selector})",
+                                            )
+                                            print(
+                                                f"[STEP] click_if_exists clicked and overlay hidden: {selector}"
+                                            )
+                                            clicked = True
+                                        except Exception:
+                                            print(
+                                                f"[STEP] click_if_exists clicked but overlay still visible, will retry: {selector}"
+                                            )
+                                            clicked = False
+                                    else:
+                                        print(f"[STEP] click_if_exists clicked: {selector}")
+                                        clicked = True
                                     break
                             except Exception:
                                 continue
@@ -1988,6 +2757,11 @@ class WorkflowCrawler:
                         if time.time() >= end_time:
                             break
                         self._sleep_with_captcha_watch(0.25, context=f"during click_if_exists ({selector})")
+
+                    print(
+                        f"[STEP] click_if_exists round {round_idx}/{max_rounds}: "
+                        f"matched_elements={round_seen}, clicked={clicked}"
+                    )
 
                     if clicked:
                         break
@@ -2032,6 +2806,10 @@ class WorkflowCrawler:
 
                 if not clicked:
                     print(f"[STEP] click_if_exists no clickable element for: {selector}")
+                print(
+                    f"[STEP] click_if_exists result: clicked={clicked}, "
+                    f"total_matches_seen={total_matches_seen}, selector={selector}"
+                )
             elif action == "type":
                 text = step.get("text", "")
                 if step.get("env"):
@@ -2596,10 +3374,21 @@ class WorkflowCrawler:
         max_pages = int(scrape_cfg.get("max_pages", 1))
         next_page = scrape_cfg.get("next_page")
 
+        current_url_before = (self._safe_current_url() or "").lower()
+        if self._is_managed_challenge_page() or "__cf_chl" in current_url_before:
+            raise ManagedChallengeUnresolved(
+                "Managed challenge detected before scraping; cannot determine real no-data state"
+            )
+
         for page in range(1, max_pages + 1):
             try:
                 self._wait_visible(scrape_cfg["list_by"], list_selector, timeout=scrape_cfg.get("timeout"))
             except TimeoutException:
+                current_url_timeout = (self._safe_current_url() or "").lower()
+                if self._is_managed_challenge_page() or "__cf_chl" in current_url_timeout:
+                    raise ManagedChallengeUnresolved(
+                        "Managed challenge still active at scrape timeout; refuse allow_empty"
+                    )
                 if scrape_cfg.get("allow_empty", False):
                     raw_no_data_selectors = scrape_cfg.get("no_data_selectors", [])
                     no_data_selectors: List[str] = []

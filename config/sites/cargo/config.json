@@ -58,14 +58,32 @@
         {
           "action": "click_if_exists",
           "by": "xpath",
-          "selector": "//div[contains(@class,'Promotion_content')]//button[normalize-space()='Skip' or contains(@class,'PromotionPopoverContent_skip-btn')] | //button[contains(@aria-label,'Skip')] | //button[contains(@class,'skip') and not(@disabled)]",
-          "comment": "页面慢加载时持续轮询引导遮罩，发现即关闭",
-          "timeout": 2,
-          "max_rounds": 20,
+          "selector": "//div[contains(@class,'Promotion_content') and .//p[contains(normalize-space(),'Customize Columns')]]//button[normalize-space()='Skip' and contains(@class,'PromotionPopoverContent_skip-btn')]",
+          "comment": "第2步先定位Customize Columns浮层，再点击其中Skip",
+          "timeout": 1,
+          "max_rounds": 25,
+          "post_click_invisible_by": "xpath",
+          "post_click_invisible_selector": "//div[contains(@class,'Promotion_content') and .//p[contains(normalize-space(),'Customize Columns')]]",
+          "post_click_invisible_timeout": 2,
           "check_next_on_timeout": true,
           "next_by": "xpath",
           "next_selector": "(//div[contains(@class,'Select_select-container')])[1]",
-          "next_check_timeout": 2
+          "next_check_timeout": 1
+        },
+        {
+          "action": "click_if_exists",
+          "by": "xpath",
+          "selector": "//div[contains(@class,'SecondLevelMenuItem_panel') and .//p[contains(normalize-space(),'Surcharge Search')]]//button[normalize-space()='Skip' and contains(@class,'PromotionPopoverContent_skip-btn')]",
+          "comment": "第3步同第2步：定位Surcharge Search浮层后点击Skip",
+          "timeout": 1,
+          "max_rounds": 25,
+          "post_click_invisible_by": "xpath",
+          "post_click_invisible_selector": "//div[contains(@class,'SecondLevelMenuItem_panel') and .//p[contains(normalize-space(),'Surcharge Search')]]",
+          "post_click_invisible_timeout": 2,
+          "check_next_on_timeout": true,
+          "next_by": "xpath",
+          "next_selector": "(//div[contains(@class,'Select_select-container')])[1]",
+          "next_check_timeout": 1
         },
         {
           "action": "click",

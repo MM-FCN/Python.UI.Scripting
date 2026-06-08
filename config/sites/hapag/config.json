@@ -17,9 +17,10 @@
   "keep_browser_open": false,
   "edge": {
     "stealth_mode": true,
-    "user_data_dir": "C:/fcn/MyEdgeDataHapag",
+    "accept_language": "en-US,en;q=0.9",
+    "user_data_dir": "",
     "attach_existing": false,
-    "debugger_address": "127.0.0.1:9222"
+    "debugger_address": ""
   },
   "browser_startup": {
     "mode": "system",
@@ -30,11 +31,25 @@
   },
   "default_timeout": 15,
   "download_dir": "output/hapag/downloads",
+  "flaresolverr": {
+    "enabled": true,
+    "endpoint": "http://localhost:8191/v1",
+    "cmd": "request.get",
+    "session_id": "hapag-session",
+    "session_ttl_minutes": 15,
+    "warmup_urls": [
+      "https://www.hapag-lloyd.com/en/home.html"
+    ],
+    "url": "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html",
+    "max_timeout": 60000,
+    "request_timeout": 75,
+    "cookie_file": "output/hapag/hapag_flaresolverr_cookies.json"
+  },
   "fallback": {
     "no_data": {
       "require_any_fields": [
-        "Event",
-        "DateTime"
+        "Status",
+        "Date"
       ],
       "text_contains": [
         "container for given container number not found",
@@ -68,11 +83,27 @@
     "captcha": {
       "type": "checkbox",
       "auto_check_during_steps": true,
-      "iframe_selector": "iframe[src*='challenge-platform'], iframe[title*='challenge'], iframe[src*='turnstile']",
-      "popup_selector": "#content, #BbLB6, .cb-c",
-      "checkbox_selector": "#content input[type='checkbox'], #content label.cb-lb, #content .cb-i, #content span.cb-lb-t",
-      "success_selector": "#success[style*='display: flex'], #success-text, #success-i",
-      "checkbox_retries": 2
+      "iframe_selector": "iframe[src*='challenge-platform'], iframe[title*='challenge'], iframe[src*='turnstile'], iframe[id*='cf-chl-widget'], iframe[name*='cf-chl-widget']",
+      "popup_selector": "#content, #BbLB6, #TQpKs1, .hal-container-header, .cb-c",
+      "checkbox_selector": "#content input[type='checkbox'], #content label.cb-lb, #content .cb-i, #content span.cb-lb-t, #BbLB6 input[type='checkbox'], #BbLB6 label, #BbLB6 [role='checkbox']",
+      "success_selector": "#success[style*='display: flex'], #success-text, #success-i, #TQpKs1[style*='display: block']",
+      "checkbox_retries": 3,
+      "checkbox_monitor_seconds": 12,
+      "checkbox_retry_interval_seconds": 0.8,
+      "managed_wait_seconds": 20,
+      "managed_poll_interval_seconds": 0.8,
+      "managed_refresh_retries": 2,
+      "managed_verify_xpaths": [
+        "//span[contains(normalize-space(), 'Verify you are human')]/ancestor::label",
+        "//label[.//span[contains(normalize-space(), 'Verify you are human')]]",
+        "//div[@id='content']//label[contains(@class,'cb-lb')]",
+        "//div[@id='content']//input[@type='checkbox']",
+        "//input[@type='checkbox' or @role='checkbox']"
+      ],
+      "debug": {
+        "enabled": true,
+        "dir": "output/challenge-debug"
+      }
     },
     "wait_success": {
       "type": "",
@@ -123,37 +154,11 @@
           "by": "xpath",
           "selector": "//button[@id='tracing_by_container_f:hl25']",
           "timeout": 15
-        },
-        {
-          "action": "sleep",
-          "seconds": 0.8,
-          "comment": "等待下拉选项浮层渲染"
-        },
-        {
-          "action": "click_if_exists",
-          "by": "xpath",
-          "selector": "//li[@role='option' and normalize-space()='All'] | //li[@data-testid='tnt-search-multiple-item' and normalize-space()='All'] | //div[@role='option' and normalize-space()='All'] | //button[normalize-space()='All']",
-          "timeout": 20,
-          "comment": "下拉选项可能延迟出现，轮询点击All"
-        },
-        {
-        "action": "type",
-        "by": "css",
-        "selector": "input[data-testid='tnt-search-multiple-input']",
-        "value": "{{ContainerNo}}",
-        "timeout": 20,
-        "clear_first": true
-        },
-        {
-        "action": "click",
-        "by": "css",
-        "selector": "button[data-testid='tnt-search-multiple-button']",
-        "timeout": 15
         }
       ],
       "scrape": {
         "list_by": "css",
-        "list_selector": "#event-table-container-id table.EventTable_table-container__Qioyi tr.EventTable_table-row__yVKnA",
+        "list_selector": "#tracing_by_container_f\\:hl66 > tbody > tr",
         "allow_empty": true,
         "no_data_selectors": [
           "span.error[id='tracing_by_container_f:hl11']",
@@ -162,21 +167,39 @@
         ],
         "fields": [
           {
-            "name": " Place",
+            "name": "Status",
             "by": "css",
-            "selector": "td:nth-child(1) .EventTable_country-name__fax8l",
+            "selector": "td:nth-child(1) span.nonEditableContent",
             "attr": "text"
           },
           {
-            "name": "Event",
+            "name": "Place",
             "by": "css",
-            "selector": "td:nth-child(2) .EventTable_event-name-vessel-group__sDbkT > div:first-child",
+            "selector": "td:nth-child(2) span.nonEditableContent",
             "attr": "text"
           },
           {
-            "name": "DateTime",
+            "name": "Date",
             "by": "css",
-            "selector": "td:nth-child(2) .EventDate_event-date-container__dLSip",
+            "selector": "td:nth-child(3) span.nonEditableContent",
+            "attr": "text"
+          },
+          {
+            "name": "Time",
+            "by": "css",
+            "selector": "td:nth-child(4) span.nonEditableContent",
+            "attr": "text"
+          },
+          {
+            "name": "Transport",
+            "by": "css",
+            "selector": "td:nth-child(5) span.nonEditableContent",
+            "attr": "text"
+          },
+          {
+            "name": "VoyageNo",
+            "by": "css",
+            "selector": "td:nth-child(6) span.nonEditableContent",
             "attr": "text"
           }
         ],
