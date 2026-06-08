@@ -1,4 +1,5 @@
 {
+  "selenium_remote_url": "http://172.17.0.1:4444/wd/hub",
   "watch": {
     "enabled_by_default": true,
     "interval_seconds": 10,
