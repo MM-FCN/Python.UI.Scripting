@@ -665,7 +665,7 @@ def _run_input_timer_mode(
                         headless=headless,
                         params_list=job_params_list,
                         base_url_override=base_url_override,
-                        global_config=global_cfg,
+                        global_config=global_config,
                     )
                     if not ok:
                         success = False
@@ -684,7 +684,7 @@ def _run_input_timer_mode(
                             headless=headless,
                             params=job_params,
                             base_url_override=base_url_override,
-                            global_config=global_cfg,
+                            global_config=global_config,
                         )
                         if not ok:
                             success = False
