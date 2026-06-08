@@ -1,9 +1,12 @@
 import argparse
 import json
+import math
 import re
+import sqlite3
 import subprocess
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -12,7 +15,7 @@ import requests
 from dotenv import load_dotenv
 
 from src.config_loader import ConfigError, load_config
-from src.logging_utils import setup_file_logging
+from src.logging_utils import cleanup_old_logs, setup_file_logging
 from src.workflow import create_workflow_crawler
 
 
@@ -110,7 +113,8 @@ def run_config(
     headless: bool,
     params: Optional[dict[str, str]] = None,
     base_url_override: Optional[str] = None,
-) -> tuple[bool, list[dict[str, Any]]]:
+    defer_output_save: bool = False,
+) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config: {config_path}")
     print(f"{'='*60}")
@@ -119,17 +123,23 @@ def run_config(
         if base_url_override:
             config["base_url"] = base_url_override
             print(f"[TASK] Override base_url by input URI: {base_url_override}")
+        if defer_output_save:
+            config["__defer_output_save"] = True
+            config["__deferred_output_items"] = []
         crawler = create_workflow_crawler(config=config, headless=headless, params=params or {})
         records = crawler.run()
+        deferred_items = crawler.config.get("__deferred_output_items", [])
+        if not isinstance(deferred_items, list):
+            deferred_items = []
         print(f"[DONE] Crawl finished. Records: {len(records)}")
-        return True, records
+        return True, records, deferred_items
     except ConfigError as e:
         print(f"[CONFIG ERROR] {e}")
-        return False, []
+        return False, [], []
     except Exception as e:
         print(f"[ERROR] {e}")
         traceback.print_exc()
-        return False, []
+        return False, [], []
 
 
 def run_config_batch_reuse_session(
@@ -137,6 +147,7 @@ def run_config_batch_reuse_session(
     headless: bool,
     params_list: list[dict[str, str]],
     base_url_override: Optional[str] = None,
+    defer_output_save: bool = False,
 ) -> tuple[bool, list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config (batch reuse): {config_path}")
@@ -147,6 +158,9 @@ def run_config_batch_reuse_session(
         if base_url_override:
             config["base_url"] = base_url_override
             print(f"[TASK] Override base_url by input URI: {base_url_override}")
+        if defer_output_save:
+            config["__defer_output_save"] = True
+            config["__deferred_output_items"] = []
 
         crawler = create_workflow_crawler(config=config, headless=headless, params={})
 
@@ -210,6 +224,7 @@ def run_config_batch_reuse_session(
                                 pass
 
                 crawler.params = dict(one_params or {})
+                crawler.config["__deferred_output_items"] = []
                 print(
                     f"[BATCH] Job {idx}/{len(params_list)} start, "
                     f"params={sorted(crawler.params.keys())}"
@@ -223,7 +238,14 @@ def run_config_batch_reuse_session(
                     crawler._save_records(records)
 
                 print(f"[BATCH] Job {idx}/{len(params_list)} done. Records: {len(records)}")
-                job_results.append({"params": dict(crawler.params), "records": records})
+                deferred_items = crawler.config.get("__deferred_output_items", [])
+                if not isinstance(deferred_items, list):
+                    deferred_items = []
+                job_results.append({
+                    "params": dict(crawler.params),
+                    "records": records,
+                    "deferred_output_items": deferred_items,
+                })
 
             print("[BATCH] Shared-session batch completed.")
             return True, job_results
@@ -242,6 +264,42 @@ def run_config_batch_reuse_session(
         print(f"[ERROR] {e}")
         traceback.print_exc()
         return False, []
+
+
+def _persist_deferred_output_items(
+    *,
+    config_path: str,
+    headless: bool,
+    params: dict[str, str],
+    base_url_override: Optional[str],
+    deferred_items: list[dict[str, Any]],
+) -> bool:
+    if not deferred_items:
+        return True
+
+    try:
+        config = load_config(config_path)
+        if base_url_override:
+            config["base_url"] = base_url_override
+
+        config["__defer_output_save"] = False
+        crawler = create_workflow_crawler(config=config, headless=headless, params=params)
+
+        for item in deferred_items:
+            if not isinstance(item, dict):
+                continue
+            output_cfg = item.get("output_cfg", {})
+            records = item.get("records", [])
+            if not isinstance(output_cfg, dict) or not isinstance(records, list):
+                continue
+            crawler.config["output"] = output_cfg
+            crawler.popup_data = []
+            crawler._save_records(records)
+        return True
+    except Exception as e:
+        print(f"[OUTPUT] Failed to persist deferred records for {config_path}: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return False
 
 
 def _push_records_to_uri(
@@ -426,6 +484,284 @@ def _extract_params_uri_and_batch(
     return params, callback_uri, base_url_override, batch
 
 
+def _ensure_state_db(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crawl_item_state (
+                site_name TEXT NOT NULL,
+                item_field TEXT NOT NULL,
+                item_value TEXT NOT NULL,
+                status TEXT NOT NULL,
+                record_count INTEGER NOT NULL DEFAULT 0,
+                source_file TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (site_name, item_field, item_value)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _normalize_item_value(item_field: str, value: Any) -> str:
+    normalized = str(value).strip()
+    if not normalized:
+        return ""
+
+    # Treat common tracking identifiers case-insensitively for dedup/state matching.
+    if str(item_field).strip() in {"ContainerNo", "MAWB", "HAWNO"}:
+        return normalized.upper()
+    return normalized
+
+
+def _load_successful_items(
+    db_path: Path,
+    *,
+    site_name: str,
+    item_field: str,
+    item_values: list[str],
+) -> set[str]:
+    normalized_values = [
+        _normalize_item_value(item_field, value)
+        for value in item_values
+        if _normalize_item_value(item_field, value)
+    ]
+    if not normalized_values:
+        return set()
+    _ensure_state_db(db_path)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        placeholders = ",".join("?" for _ in normalized_values)
+        sql = (
+            "SELECT item_value FROM crawl_item_state "
+            "WHERE site_name=? AND item_field=? AND status='success' "
+            f"AND item_value IN ({placeholders})"
+        )
+        rows = conn.execute(sql, [site_name, item_field, *normalized_values]).fetchall()
+        return {
+            _normalize_item_value(item_field, row[0])
+            for row in rows
+            if row and row[0] is not None and _normalize_item_value(item_field, row[0])
+        }
+    finally:
+        conn.close()
+
+
+def _upsert_item_results(
+    db_path: Path,
+    *,
+    site_name: str,
+    item_field: str,
+    results: list[dict[str, Any]],
+    source_file: str,
+) -> None:
+    if not results:
+        return
+    _ensure_state_db(db_path)
+    now_ts = datetime.now().isoformat(timespec="seconds")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows_to_upsert: list[tuple[str, str, str, str, int, str, str]] = []
+        for item in results:
+            normalized_value = _normalize_item_value(item_field, item.get("item_value", ""))
+            if not normalized_value:
+                continue
+            rows_to_upsert.append(
+                (
+                    site_name,
+                    item_field,
+                    normalized_value,
+                    str(item.get("status", "error")).strip() or "error",
+                    max(0, int(item.get("record_count", 0))),
+                    source_file,
+                    now_ts,
+                )
+            )
+
+        conn.executemany(
+            """
+            INSERT INTO crawl_item_state(
+                site_name, item_field, item_value, status, record_count, source_file, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(site_name, item_field, item_value)
+            DO UPDATE SET
+                status=excluded.status,
+                record_count=excluded.record_count,
+                source_file=excluded.source_file,
+                updated_at=excluded.updated_at
+            """,
+            rows_to_upsert,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _split_into_chunks(items: list[dict[str, str]], worker_count: int, chunk_size: int) -> list[list[dict[str, str]]]:
+    if not items:
+        return []
+    if chunk_size <= 0:
+        chunk_size = int(math.ceil(len(items) / max(1, worker_count)))
+    chunk_size = max(1, chunk_size)
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
+def _load_site_no_data_rule(project_root: Path, site_name: str) -> dict[str, Any]:
+    cfg_path = project_root / "config" / "sites" / site_name / "config.json"
+    if not cfg_path.exists():
+        return {}
+    try:
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    fallback_cfg = payload.get("fallback", {})
+    if not isinstance(fallback_cfg, dict):
+        return {}
+    no_data_cfg = fallback_cfg.get("no_data", {})
+    if not isinstance(no_data_cfg, dict):
+        return {}
+    return no_data_cfg
+
+
+def _records_have_effective_data(records: list[dict[str, Any]], no_data_rule: dict[str, Any]) -> bool:
+    if not isinstance(records, list) or not records:
+        return False
+
+    require_any_fields = no_data_rule.get("require_any_fields", [])
+    if not isinstance(require_any_fields, list):
+        require_any_fields = []
+    required_fields = [str(x).strip() for x in require_any_fields if str(x).strip()]
+
+    text_contains = no_data_rule.get("text_contains", [])
+    if not isinstance(text_contains, list):
+        text_contains = []
+    deny_texts = [str(x).strip().lower() for x in text_contains if str(x).strip()]
+
+    if required_fields:
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            for key in required_fields:
+                value = row.get(key)
+                if value is not None and str(value).strip():
+                    return True
+        return False
+
+    if deny_texts:
+        all_values: list[str] = []
+        for row in records:
+            if isinstance(row, dict):
+                all_values.extend(str(v).strip().lower() for v in row.values() if v is not None)
+            elif row is not None:
+                all_values.append(str(row).strip().lower())
+        joined = "\n".join(all_values)
+        if any(marker in joined for marker in deny_texts):
+            return False
+
+    return True
+
+
+def _run_container_fallback_chain(
+    *,
+    project_root: Path,
+    container_no: str,
+    sites_chain: list[str],
+    headless: bool,
+    base_runtime_params: dict[str, str],
+    base_url_override: Optional[str],
+    prepare_browser_startup,
+    site_error_retries: int = 2,
+    defer_output_save: bool = False,
+) -> tuple[bool, dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+    params = dict(base_runtime_params)
+    params["ContainerNo"] = container_no
+    tried_sites: list[str] = []
+    max_attempts = max(1, int(site_error_retries) + 1)
+
+    for one_site in sites_chain:
+        site_name = str(one_site).strip().lower()
+        if not site_name:
+            continue
+        cfg_path = project_root / "config" / "sites" / site_name / "config.json"
+        if not cfg_path.exists():
+            print(f"[FALLBACK] Site config missing: {cfg_path}, skip")
+            tried_sites.append(site_name)
+            continue
+
+        if not prepare_browser_startup(site_name, cfg_path):
+            print(f"[FALLBACK] Browser startup prepare failed for site '{site_name}', skip")
+            tried_sites.append(site_name)
+            continue
+
+        ok = False
+        records: list[dict[str, Any]] = []
+        selected_deferred_items: list[dict[str, Any]] = []
+        for attempt in range(1, max_attempts + 1):
+            print(
+                f"[FALLBACK] Try site={site_name}, ContainerNo={container_no}, "
+                f"attempt={attempt}/{max_attempts}"
+            )
+            ok, records, deferred_items = run_config(
+                str(cfg_path),
+                headless=headless,
+                params=params,
+                base_url_override=base_url_override,
+                defer_output_save=defer_output_save,
+            )
+            if ok:
+                selected_deferred_items = deferred_items
+                break
+            if attempt < max_attempts:
+                print(
+                    f"[FALLBACK] Site '{site_name}' execution error. "
+                    "Restarting browser and retrying current site..."
+                )
+                time.sleep(1)
+
+        tried_sites.append(site_name)
+        if not ok:
+            error_record = {
+                "ContainerNo": container_no,
+                "source_site": site_name,
+                "status": "site_error",
+                "tried_sites": ",".join(tried_sites),
+            }
+            print(
+                f"[FALLBACK] Site '{site_name}' failed after {max_attempts} attempts; "
+                "stop chain for this container"
+            )
+            return False, params, [error_record], []
+
+        no_data_rule = _load_site_no_data_rule(project_root, site_name)
+        has_data = _records_have_effective_data(records, no_data_rule)
+        if not has_data:
+            print(f"[FALLBACK] No data on site={site_name}, continue next site")
+            continue
+
+        normalized: list[dict[str, Any]] = []
+        for row in records:
+            item = dict(row) if isinstance(row, dict) else {"value": row}
+            item.setdefault("ContainerNo", container_no)
+            item.setdefault("source_site", site_name)
+            normalized.append(item)
+        print(f"[FALLBACK] Data found on site={site_name}, records={len(normalized)}")
+        return True, params, normalized, selected_deferred_items
+
+    not_found_record = {
+        "ContainerNo": container_no,
+        "source_site": "",
+        "status": "not_found",
+        "tried_sites": ",".join(tried_sites),
+    }
+    return True, params, [not_found_record], []
+
+
 def _run_input_timer_mode(
     *,
     project_root: Path,
@@ -437,6 +773,9 @@ def _run_input_timer_mode(
     push_timeout_seconds: int = 30,
     push_retries: int = 0,
     push_verify_ssl: bool = True,
+    cargo_fallback_cfg: Optional[dict[str, Any]] = None,
+    parallel_cfg: Optional[dict[str, Any]] = None,
+    input_done_retention_days: int = 30,
 ) -> None:
     interval = max(1, int(interval_seconds))
     seen_fingerprints: dict[str, tuple[int, int]] = {}
@@ -447,8 +786,50 @@ def _run_input_timer_mode(
     if watch_sites:
         print(f"[WATCH] Site filter enabled: {sorted(watch_sites)}")
 
+    fallback_cfg = cargo_fallback_cfg if isinstance(cargo_fallback_cfg, dict) else {}
+    fallback_enabled = bool(fallback_cfg.get("enabled", False))
+    fallback_trigger_site = str(fallback_cfg.get("trigger_site", "cargo")).strip().lower() or "cargo"
+    raw_chain = fallback_cfg.get("sites_chain", ["cargo", "cma", "hapag"])
+    if isinstance(raw_chain, str):
+        fallback_chain = [s.strip().lower() for s in raw_chain.split(",") if s.strip()]
+    elif isinstance(raw_chain, list):
+        fallback_chain = [str(s).strip().lower() for s in raw_chain if str(s).strip()]
+    else:
+        fallback_chain = ["cargo", "cma", "hapag"]
+    site_error_retries = int(fallback_cfg.get("site_error_retries", 2))
+    if site_error_retries < 0:
+        site_error_retries = 0
+    reuse_trigger_site_session = bool(fallback_cfg.get("reuse_trigger_site_session", True))
+    if fallback_enabled:
+        print(
+            f"[WATCH] Cargo fallback enabled: trigger_site={fallback_trigger_site}, "
+            f"chain={fallback_chain}, site_error_retries={site_error_retries}"
+        )
+
+    parallel_cfg = parallel_cfg if isinstance(parallel_cfg, dict) else {}
+    parallel_enabled = bool(parallel_cfg.get("enabled", False))
+    parallel_max_workers = max(1, int(parallel_cfg.get("max_workers", 4)))
+    parallel_chunk_size = int(parallel_cfg.get("chunk_size", 0))
+    skip_successful_items = bool(parallel_cfg.get("skip_successful_items", True))
+    state_db_raw = str(parallel_cfg.get("state_db_path", "state/crawl_item_state.db")).strip()
+    if not state_db_raw:
+        state_db_raw = "state/crawl_item_state.db"
+    state_db_path = Path(state_db_raw)
+    if not state_db_path.is_absolute():
+        state_db_path = (project_root / state_db_path).resolve()
+
+    if parallel_enabled:
+        print(
+            f"[WATCH] Parallel batch mode enabled: max_workers={parallel_max_workers}, "
+            f"chunk_size={'auto' if parallel_chunk_size <= 0 else parallel_chunk_size}, "
+            f"skip_successful_items={skip_successful_items}, state_db={state_db_path}"
+        )
+
     done_root = project_root / "input_done"
     done_root.mkdir(parents=True, exist_ok=True)
+    effective_input_done_retention_days = max(1, int(input_done_retention_days))
+    cleanup_old_logs(done_root, keep_days=effective_input_done_retention_days)
+    print(f"[WATCH] input_done retention days: {effective_input_done_retention_days}")
 
     def prepare_browser_startup(site_name: str, cfg_path: Path) -> bool:
         try:
@@ -528,6 +909,7 @@ def _run_input_timer_mode(
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = site_done_dir / f"{src.stem}_{ts}{src.suffix}"
         src.replace(dst)
+        cleanup_old_logs(site_done_dir, keep_days=effective_input_done_retention_days)
         return dst
 
     def rename_failed_input_for_retry(src: Path) -> Path:
@@ -607,8 +989,30 @@ def _run_input_timer_mode(
                 runtime_params.update(extracted_params)
 
                 job_params_list: list[dict[str, str]] = []
+                batch_field = ""
+                batch_values: list[str] = []
+                state_track_field = ""
                 if batch:
                     batch_field, batch_values = batch
+                    state_track_field = batch_field
+                    original_count = len(batch_values)
+                    deduped_values: list[str] = []
+                    seen_values: set[str] = set()
+                    for raw in batch_values:
+                        value = str(raw).strip()
+                        normalized_value = _normalize_item_value(batch_field, value)
+                        if not normalized_value or normalized_value in seen_values:
+                            continue
+                        seen_values.add(normalized_value)
+                        deduped_values.append(normalized_value)
+                    batch_values = deduped_values
+
+                    if len(batch_values) != original_count:
+                        print(
+                            f"[WATCH] Batch input deduplicated: field={batch_field}, "
+                            f"original={original_count}, unique={len(batch_values)}"
+                        )
+
                     for item in batch_values:
                         one_params = dict(runtime_params)
                         one_params[batch_field] = item
@@ -618,24 +1022,452 @@ def _run_input_timer_mode(
                     )
                 else:
                     job_params_list.append(runtime_params)
+                    for candidate_field in ("ContainerNo", "MAWB", "HAWNO"):
+                        candidate_value = _normalize_item_value(
+                            candidate_field,
+                            runtime_params.get(candidate_field, ""),
+                        )
+                        if candidate_value:
+                            state_track_field = candidate_field
+                            break
+
+                skipped_success_values: set[str] = set()
+                attempted_values: list[str] = []
+                if state_track_field and skip_successful_items:
+                    if batch and batch_field:
+                        raw_values = [
+                            _normalize_item_value(state_track_field, v)
+                            for v in batch_values
+                            if _normalize_item_value(state_track_field, v)
+                        ]
+                    else:
+                        raw_values = []
+                        for p in job_params_list:
+                            normalized_value = _normalize_item_value(
+                                state_track_field,
+                                p.get(state_track_field, ""),
+                            )
+                            if normalized_value:
+                                raw_values.append(normalized_value)
+
+                    skipped_success_values = _load_successful_items(
+                        state_db_path,
+                        site_name=normalized_site_name,
+                        item_field=state_track_field,
+                        item_values=raw_values,
+                    )
+                    if skipped_success_values:
+                        print(
+                            f"[WATCH] Skip already-success items: field={state_track_field}, "
+                            f"skipped={len(skipped_success_values)}"
+                        )
+                        job_params_list = [
+                            p for p in job_params_list
+                            if _normalize_item_value(
+                                state_track_field,
+                                p.get(state_track_field, ""),
+                            ) not in skipped_success_values
+                        ]
+
+                if state_track_field:
+                    attempted_values = [
+                        _normalize_item_value(state_track_field, p.get(state_track_field, ""))
+                        for p in job_params_list
+                        if _normalize_item_value(state_track_field, p.get(state_track_field, ""))
+                    ]
+
+                if state_track_field and not job_params_list:
+                    print(
+                        f"[WATCH] All batch items already successful, skip crawling. "
+                        f"field={state_track_field}, file={file_path.name}"
+                    )
+                    push_ok = True
+                    if callback_uri and skipped_success_values:
+                        skipped_jobs: list[dict[str, Any]] = []
+                        for item_value in sorted(skipped_success_values):
+                            one_params = dict(runtime_params)
+                            one_params[state_track_field] = item_value
+                            skipped_jobs.append({
+                                "params": one_params,
+                                "records": [{
+                                    state_track_field: item_value,
+                                    "source_site": normalized_site_name,
+                                    "status": "cached_success_skipped",
+                                }],
+                            })
+
+                        print(
+                            f"[WATCH] Callback push for skipped-success items: "
+                            f"field={state_track_field}, jobs={len(skipped_jobs)}"
+                        )
+                        push_ok = _push_records_to_uri(
+                            uri=callback_uri,
+                            site_name=site_name,
+                            input_file_name=file_path.name,
+                            params=runtime_params,
+                            records=[],
+                            job_results=skipped_jobs,
+                            timeout_seconds=push_timeout_seconds,
+                            retries=push_retries,
+                            verify_ssl=push_verify_ssl,
+                        )
+
+                    if file_path.exists():
+                        if not push_ok:
+                            print(
+                                "[WATCH] Callback push failed for skipped-success items; "
+                                "archive input to avoid retry loop."
+                            )
+                        archived = archive_input_file(file_path, site_name)
+                        seen_fingerprints[key] = fingerprint
+                        print(f"[WATCH] Archived processed input: {archived}")
+                    continue
 
                 success = True
                 push_jobs: list[dict[str, Any]] = []
-                if batch and len(job_params_list) > 1:
-                    print(
-                        f"[WATCH] Batch file reuse mode enabled: file={file_path.name}, "
-                        f"jobs={len(job_params_list)}"
-                    )
-                    ok, batch_results = run_config_batch_reuse_session(
-                        str(cfg_path),
-                        headless=headless,
-                        params_list=job_params_list,
-                        base_url_override=base_url_override,
-                    )
-                    if not ok:
+                deferred_output_jobs: list[dict[str, Any]] = []
+                processed_jobs: list[dict[str, Any]] = []
+                has_container_input = (
+                    (batch is not None and str(batch[0]) == "ContainerNo")
+                    or ("ContainerNo" in runtime_params and str(runtime_params.get("ContainerNo", "")).strip() != "")
+                )
+                use_fallback_chain = (
+                    fallback_enabled
+                    and normalized_site_name == fallback_trigger_site
+                    and has_container_input
+                )
+                if use_fallback_chain:
+                    container_values: list[str] = []
+                    if batch and str(batch[0]) == "ContainerNo":
+                        container_values = [str(v).strip() for v in batch_values if str(v).strip()]
+                    else:
+                        raw_container = str(runtime_params.get("ContainerNo", "")).strip()
+                        if raw_container:
+                            container_values = [raw_container]
+
+                    if not container_values:
+                        print("[FALLBACK] No ContainerNo found in input, fallback chain skipped")
                         success = False
-                    elif callback_uri:
-                        push_jobs.extend(batch_results)
+                    else:
+                        print(
+                            f"[FALLBACK] Processing file={file_path.name} with container count={len(container_values)}"
+                        )
+                        can_reuse_trigger_site = (
+                            reuse_trigger_site_session
+                            and len(container_values) > 1
+                            and bool(fallback_chain)
+                            and fallback_chain[0] == fallback_trigger_site
+                        )
+
+                        if can_reuse_trigger_site:
+                            trigger_site = fallback_trigger_site
+                            trigger_cfg_path = project_root / "config" / "sites" / trigger_site / "config.json"
+                            trigger_params_list: list[dict[str, str]] = []
+                            for one_container in container_values:
+                                one_params = dict(runtime_params)
+                                one_params["ContainerNo"] = one_container
+                                trigger_params_list.append(one_params)
+
+                            print(
+                                f"[FALLBACK] Reusing one '{trigger_site}' browser session for "
+                                f"{len(trigger_params_list)} containers"
+                            )
+                            ok_trigger, trigger_results = run_config_batch_reuse_session(
+                                str(trigger_cfg_path),
+                                headless=headless,
+                                params_list=trigger_params_list,
+                                base_url_override=base_url_override,
+                                defer_output_save=bool(callback_uri),
+                            )
+                            if not ok_trigger:
+                                success = False
+                            else:
+                                trigger_no_data_rule = _load_site_no_data_rule(project_root, trigger_site)
+                                trigger_result_by_container: dict[str, dict[str, Any]] = {}
+                                for item in trigger_results:
+                                    if not isinstance(item, dict):
+                                        continue
+                                    item_params = item.get("params", {})
+                                    if not isinstance(item_params, dict):
+                                        continue
+                                    container_key = _normalize_item_value(
+                                        "ContainerNo",
+                                        item_params.get("ContainerNo", ""),
+                                    )
+                                    if container_key and container_key not in trigger_result_by_container:
+                                        trigger_result_by_container[container_key] = item
+
+                                downstream_chain = fallback_chain[1:]
+                                for idx, container_no in enumerate(container_values, start=1):
+                                    print(
+                                        f"[FALLBACK] Container job {idx}/{len(container_values)}: {container_no}"
+                                    )
+                                    container_key = _normalize_item_value("ContainerNo", container_no)
+                                    one_params = dict(runtime_params)
+                                    one_params["ContainerNo"] = container_no
+
+                                    trigger_job = trigger_result_by_container.get(container_key)
+                                    trigger_records = []
+                                    trigger_deferred_items: list[dict[str, Any]] = []
+                                    if trigger_job:
+                                        trigger_records = (
+                                            trigger_job.get("records", [])
+                                            if isinstance(trigger_job.get("records", []), list)
+                                            else []
+                                        )
+                                        trigger_deferred_items = (
+                                            trigger_job.get("deferred_output_items", [])
+                                            if isinstance(trigger_job.get("deferred_output_items", []), list)
+                                            else []
+                                        )
+
+                                    has_trigger_data = _records_have_effective_data(trigger_records, trigger_no_data_rule)
+                                    if has_trigger_data:
+                                        normalized_records: list[dict[str, Any]] = []
+                                        for row in trigger_records:
+                                            normalized_row = dict(row) if isinstance(row, dict) else {"value": row}
+                                            normalized_row.setdefault("ContainerNo", container_no)
+                                            normalized_row.setdefault("source_site", trigger_site)
+                                            normalized_records.append(normalized_row)
+
+                                        processed_jobs.append({"params": dict(one_params), "records": normalized_records})
+                                        if callback_uri:
+                                            push_jobs.append({"params": dict(one_params), "records": normalized_records})
+                                            if trigger_deferred_items:
+                                                deferred_output_jobs.append({
+                                                    "config_path": str(trigger_cfg_path),
+                                                    "params": dict(one_params),
+                                                    "deferred_output_items": trigger_deferred_items,
+                                                })
+                                        continue
+
+                                    if not downstream_chain:
+                                        no_hit_records = [{
+                                            "ContainerNo": container_no,
+                                            "source_site": "",
+                                            "status": "not_found",
+                                            "tried_sites": trigger_site,
+                                        }]
+                                        processed_jobs.append({"params": dict(one_params), "records": no_hit_records})
+                                        if callback_uri:
+                                            push_jobs.append({"params": dict(one_params), "records": no_hit_records})
+                                        continue
+
+                                    ok_one, fb_params, fb_records, fb_deferred_items = _run_container_fallback_chain(
+                                        project_root=project_root,
+                                        container_no=container_no,
+                                        sites_chain=downstream_chain,
+                                        headless=headless,
+                                        base_runtime_params=runtime_params,
+                                        base_url_override=base_url_override,
+                                        prepare_browser_startup=prepare_browser_startup,
+                                        site_error_retries=site_error_retries,
+                                        defer_output_save=bool(callback_uri),
+                                    )
+                                    processed_jobs.append({"params": dict(fb_params), "records": fb_records})
+                                    if not ok_one:
+                                        success = False
+                                        break
+                                    if callback_uri:
+                                        push_jobs.append({"params": dict(fb_params), "records": fb_records})
+                                        if fb_deferred_items:
+                                            source_site = str(fb_records[0].get("source_site", "")).strip().lower() if fb_records else ""
+                                            if source_site:
+                                                source_cfg_path = project_root / "config" / "sites" / source_site / "config.json"
+                                            else:
+                                                source_cfg_path = cfg_path
+                                            deferred_output_jobs.append({
+                                                "config_path": str(source_cfg_path),
+                                                "params": dict(fb_params),
+                                                "deferred_output_items": fb_deferred_items,
+                                            })
+                        else:
+                            run_parallel = parallel_enabled and len(container_values) > 1
+                            if run_parallel:
+                                worker_count = min(parallel_max_workers, len(container_values))
+                                chunk_lists = _split_into_chunks(
+                                    [{"ContainerNo": v} for v in container_values],
+                                    worker_count=worker_count,
+                                    chunk_size=parallel_chunk_size,
+                                )
+                                print(
+                                    f"[FALLBACK] Parallel mode: workers={worker_count}, chunks={len(chunk_lists)}"
+                                )
+
+                                def _run_fallback_chunk(chunk: list[dict[str, str]]) -> list[dict[str, Any]]:
+                                    chunk_results: list[dict[str, Any]] = []
+                                    for one in chunk:
+                                        one_container = str(one.get("ContainerNo", "")).strip()
+                                        if not one_container:
+                                            continue
+                                        ok_one, one_params, one_records, one_deferred_items = _run_container_fallback_chain(
+                                            project_root=project_root,
+                                            container_no=one_container,
+                                            sites_chain=fallback_chain,
+                                            headless=headless,
+                                            base_runtime_params=runtime_params,
+                                            base_url_override=base_url_override,
+                                            prepare_browser_startup=prepare_browser_startup,
+                                            site_error_retries=site_error_retries,
+                                            defer_output_save=bool(callback_uri),
+                                        )
+                                        chunk_results.append({
+                                            "ok": ok_one,
+                                            "params": one_params,
+                                            "records": one_records,
+                                            "deferred_output_items": one_deferred_items,
+                                        })
+                                    return chunk_results
+
+                                fallback_job_results: list[dict[str, Any]] = []
+                                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                                    futures = [executor.submit(_run_fallback_chunk, chunk) for chunk in chunk_lists]
+                                    for fut in as_completed(futures):
+                                        try:
+                                            fallback_job_results.extend(fut.result())
+                                        except Exception as e:
+                                            print(f"[FALLBACK] Worker failed: {type(e).__name__}: {e}")
+                                            success = False
+
+                                for one in fallback_job_results:
+                                    ok_one = bool(one.get("ok", False))
+                                    one_params = one.get("params", {}) if isinstance(one.get("params", {}), dict) else {}
+                                    one_records = one.get("records", []) if isinstance(one.get("records", []), list) else []
+                                    one_deferred_items = one.get("deferred_output_items", [])
+                                    if not ok_one:
+                                        success = False
+                                    processed_jobs.append({"params": dict(one_params), "records": one_records})
+                                    if callback_uri and ok_one:
+                                        push_jobs.append({"params": dict(one_params), "records": one_records})
+                                        if isinstance(one_deferred_items, list) and one_deferred_items:
+                                            source_site = str(one_records[0].get("source_site", "")).strip().lower() if one_records else ""
+                                            if source_site:
+                                                source_cfg_path = project_root / "config" / "sites" / source_site / "config.json"
+                                            else:
+                                                source_cfg_path = cfg_path
+                                            deferred_output_jobs.append({
+                                                "config_path": str(source_cfg_path),
+                                                "params": dict(one_params),
+                                                "deferred_output_items": one_deferred_items,
+                                            })
+                            else:
+                                for idx, container_no in enumerate(container_values, start=1):
+                                    print(
+                                        f"[FALLBACK] Container job {idx}/{len(container_values)}: {container_no}"
+                                    )
+                                    ok, one_params, one_records, one_deferred_items = _run_container_fallback_chain(
+                                        project_root=project_root,
+                                        container_no=container_no,
+                                        sites_chain=fallback_chain,
+                                        headless=headless,
+                                        base_runtime_params=runtime_params,
+                                        base_url_override=base_url_override,
+                                        prepare_browser_startup=prepare_browser_startup,
+                                        site_error_retries=site_error_retries,
+                                        defer_output_save=bool(callback_uri),
+                                    )
+                                    processed_jobs.append({"params": dict(one_params), "records": one_records})
+                                    if not ok:
+                                        success = False
+                                        break
+                                    if callback_uri:
+                                        push_jobs.append({"params": dict(one_params), "records": one_records})
+                                        if one_deferred_items:
+                                            source_site = str(one_records[0].get("source_site", "")).strip().lower() if one_records else ""
+                                            if source_site:
+                                                source_cfg_path = project_root / "config" / "sites" / source_site / "config.json"
+                                            else:
+                                                source_cfg_path = cfg_path
+                                            deferred_output_jobs.append({
+                                                "config_path": str(source_cfg_path),
+                                                "params": dict(one_params),
+                                                "deferred_output_items": one_deferred_items,
+                                            })
+                elif batch and len(job_params_list) > 1:
+                    run_parallel = parallel_enabled and len(job_params_list) > 1
+                    if run_parallel:
+                        worker_count = min(parallel_max_workers, len(job_params_list))
+                        chunks = _split_into_chunks(
+                            job_params_list,
+                            worker_count=worker_count,
+                            chunk_size=parallel_chunk_size,
+                        )
+                        print(
+                            f"[WATCH] Batch parallel mode: file={file_path.name}, jobs={len(job_params_list)}, "
+                            f"workers={worker_count}, chunks={len(chunks)}"
+                        )
+                        batch_results: list[dict[str, Any]] = []
+                        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                            futures = [
+                                executor.submit(
+                                    run_config_batch_reuse_session,
+                                    str(cfg_path),
+                                    headless,
+                                    chunk,
+                                    base_url_override,
+                                    bool(callback_uri),
+                                )
+                                for chunk in chunks
+                            ]
+                            for fut in as_completed(futures):
+                                try:
+                                    ok_one, one_results = fut.result()
+                                    if not ok_one:
+                                        success = False
+                                    if isinstance(one_results, list):
+                                        batch_results.extend(one_results)
+                                except Exception as e:
+                                    print(f"[WATCH] Parallel batch worker failed: {type(e).__name__}: {e}")
+                                    success = False
+
+                        processed_jobs.extend([
+                            {
+                                "params": dict(job.get("params", {})) if isinstance(job.get("params", {}), dict) else {},
+                                "records": job.get("records", []) if isinstance(job.get("records", []), list) else [],
+                            }
+                            for job in batch_results
+                        ])
+                        if callback_uri:
+                            push_jobs.extend(batch_results)
+                            for job in batch_results:
+                                deferred_items = job.get("deferred_output_items", [])
+                                if isinstance(deferred_items, list) and deferred_items:
+                                    deferred_output_jobs.append({
+                                        "config_path": str(cfg_path),
+                                        "params": dict(job.get("params", {})) if isinstance(job.get("params", {}), dict) else {},
+                                        "deferred_output_items": deferred_items,
+                                    })
+                    else:
+                        print(
+                            f"[WATCH] Batch file reuse mode enabled: file={file_path.name}, "
+                            f"jobs={len(job_params_list)}"
+                        )
+                        ok, batch_results = run_config_batch_reuse_session(
+                            str(cfg_path),
+                            headless=headless,
+                            params_list=job_params_list,
+                            base_url_override=base_url_override,
+                            defer_output_save=bool(callback_uri),
+                        )
+                        if not ok:
+                            success = False
+                        processed_jobs.extend([
+                            {
+                                "params": dict(job.get("params", {})) if isinstance(job.get("params", {}), dict) else {},
+                                "records": job.get("records", []) if isinstance(job.get("records", []), list) else [],
+                            }
+                            for job in batch_results
+                        ])
+                        if callback_uri:
+                            push_jobs.extend(batch_results)
+                            for job in batch_results:
+                                deferred_items = job.get("deferred_output_items", [])
+                                if isinstance(deferred_items, list) and deferred_items:
+                                    deferred_output_jobs.append({
+                                        "config_path": str(cfg_path),
+                                        "params": dict(job.get("params", {})) if isinstance(job.get("params", {}), dict) else {},
+                                        "deferred_output_items": deferred_items,
+                                    })
                 else:
                     for idx, job_params in enumerate(job_params_list, start=1):
                         print(
@@ -644,11 +1476,12 @@ def _run_input_timer_mode(
                             f"callback_uri={'yes' if callback_uri else 'no'}, "
                             f"base_url_override={'yes' if base_url_override else 'no'}"
                         )
-                        ok, records = run_config(
+                        ok, records, deferred_items = run_config(
                             str(cfg_path),
                             headless=headless,
                             params=job_params,
                             base_url_override=base_url_override,
+                            defer_output_save=bool(callback_uri),
                         )
                         if not ok:
                             success = False
@@ -656,6 +1489,13 @@ def _run_input_timer_mode(
 
                         if callback_uri:
                             push_jobs.append({"params": dict(job_params), "records": records})
+                            if deferred_items:
+                                deferred_output_jobs.append({
+                                    "config_path": str(cfg_path),
+                                    "params": dict(job_params),
+                                    "deferred_output_items": deferred_items,
+                                })
+                        processed_jobs.append({"params": dict(job_params), "records": records})
 
                 if success and callback_uri:
                     if len(push_jobs) > 1:
@@ -676,6 +1516,70 @@ def _run_input_timer_mode(
                     )
                     if not ok:
                         success = False
+                    elif deferred_output_jobs:
+                        print(
+                            f"[WATCH] Persisting deferred output files after callback success: "
+                            f"jobs={len(deferred_output_jobs)}"
+                        )
+                        for item in deferred_output_jobs:
+                            one_cfg = str(item.get("config_path", "")).strip()
+                            one_params = item.get("params", {})
+                            one_deferred_items = item.get("deferred_output_items", [])
+                            if not one_cfg:
+                                continue
+                            ok_save = _persist_deferred_output_items(
+                                config_path=one_cfg,
+                                headless=headless,
+                                params=one_params if isinstance(one_params, dict) else {},
+                                base_url_override=base_url_override,
+                                deferred_items=one_deferred_items if isinstance(one_deferred_items, list) else [],
+                            )
+                            if not ok_save:
+                                success = False
+                                break
+
+                if state_track_field and attempted_values:
+                    record_count_by_value: dict[str, int] = {}
+                    for job in processed_jobs:
+                        params_obj = job.get("params", {}) if isinstance(job.get("params", {}), dict) else {}
+                        value = _normalize_item_value(state_track_field, params_obj.get(state_track_field, ""))
+                        if not value:
+                            continue
+                        records_obj = job.get("records", []) if isinstance(job.get("records", []), list) else []
+                        record_count_by_value[value] = len(records_obj)
+
+                    state_rows: list[dict[str, Any]] = []
+                    for value in attempted_values:
+                        if value in record_count_by_value:
+                            status = "success" if success else "crawl_ok_push_failed"
+                            state_rows.append({
+                                "item_value": value,
+                                "status": status,
+                                "record_count": record_count_by_value.get(value, 0),
+                            })
+                        else:
+                            state_rows.append({
+                                "item_value": value,
+                                "status": "error",
+                                "record_count": 0,
+                            })
+
+                    try:
+                        _upsert_item_results(
+                            state_db_path,
+                            site_name=normalized_site_name,
+                            item_field=state_track_field,
+                            results=state_rows,
+                            source_file=file_path.name,
+                        )
+                        success_count = sum(1 for row in state_rows if str(row.get("status")) == "success")
+                        print(
+                            f"[WATCH] Item state updated: field={state_track_field}, total={len(state_rows)}, "
+                            f"success={success_count}"
+                        )
+                    except Exception as e:
+                        print(f"[WATCH] Failed to update state DB: {type(e).__name__}: {e}")
+
                 if success and file_path.exists():
                     try:
                         archived = archive_input_file(file_path, site_name)
@@ -756,6 +1660,7 @@ def main() -> None:
             input_root_raw = args.input_root or watch_cfg.get("input_root", "input")
             push_timeout_seconds = int(watch_cfg.get("push_timeout_seconds", 30))
             push_retries = int(watch_cfg.get("push_retries", 0))
+            input_done_retention_days = int(watch_cfg.get("input_done_retention_days", 30))
             raw_push_verify_ssl = watch_cfg.get("push_verify_ssl", True)
             if isinstance(raw_push_verify_ssl, str):
                 push_verify_ssl = raw_push_verify_ssl.strip().lower() not in {
@@ -781,6 +1686,9 @@ def main() -> None:
                 push_timeout_seconds=push_timeout_seconds,
                 push_retries=push_retries,
                 push_verify_ssl=push_verify_ssl,
+                cargo_fallback_cfg=watch_cfg.get("cargo_fallback", {}),
+                parallel_cfg=watch_cfg.get("parallel", {}),
+                input_done_retention_days=input_done_retention_days,
             )
             return
 

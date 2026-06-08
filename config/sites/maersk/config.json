@@ -1,8 +1,8 @@
 {
   "browser": "edge",
-  "base_url": "https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking",
+  "base_url": "https://www.maersk.com/tracking/",
   "default_timeout": 15,
-  "download_dir": "output/cargo/downloads",
+  "download_dir": "output/maersk/downloads",
   "fallback": {
     "no_data": {
       "require_any_fields": [
@@ -10,7 +10,7 @@
         "DateTime"
       ],
       "text_contains": [
-        "No Data Found",
+        "未找到结果",
         "no data",
         "no result",
         "not found"
@@ -48,56 +48,35 @@
   },
   "tasks": [
     {
-      "name": "cargo-tracking",
+      "name": "maersk-tracking",
       "navigation_steps": [
         {
           "action": "sleep",
-          "seconds": 10,
+          "seconds": 5,
           "comment": "页面加载较慢，先固定等待"
         },
         {
           "action": "click_if_exists",
-          "by": "xpath",
-          "selector": "//div[contains(@class,'Promotion_content')]//button[normalize-space()='Skip' or contains(@class,'PromotionPopoverContent_skip-btn')] | //button[contains(@aria-label,'Skip')] | //button[contains(@class,'skip') and not(@disabled)]",
-          "comment": "页面慢加载时持续轮询引导遮罩，发现即关闭",
-          "timeout": 2,
-          "max_rounds": 20,
-          "check_next_on_timeout": true,
-          "next_by": "xpath",
-          "next_selector": "(//div[contains(@class,'Select_select-container')])[1]",
-          "next_check_timeout": 2
-        },
-        {
-          "action": "click",
-          "by": "xpath",
-          "selector": "(//div[contains(@class,'Select_select-container')])[1]",
-          "timeout": 15
-        },
-        {
-          "action": "sleep",
-          "seconds": 4,
-          "comment": "等待下拉选项浮层渲染"
-        },
-        {
-          "action": "click_if_exists",
-          "by": "xpath",
-          "selector": "//li[@role='option' and normalize-space()='All'] | //li[@data-testid='tnt-search-multiple-item' and normalize-space()='All'] | //div[@role='option' and normalize-space()='All'] | //button[normalize-space()='All']",
-          "timeout": 20,
-          "comment": "下拉选项可能延迟出现，轮询点击All"
-        },
-        {
-          "action": "type",
           "by": "css",
-          "selector": "input[data-testid='tnt-search-multiple-input']",
+          "selector": "button[data-test='coi-allow-all-button']",
+          "timeout": 8,
+          "comment": "如出现Cookie弹窗则点击允许全部"
+        },
+        {
+          "action": "type_shadow",
+          "host_selector": "mc-input[data-test='track-input']",
+          "selector": "input#mc-input-track-input",
           "value": "{{ContainerNo}}",
           "timeout": 20,
-          "clear_first": true
+          "clear_first": true,
+          "comment": "输入提单号或集装箱编号"
         },
         {
-          "action": "click",
-          "by": "css",
-          "selector": "button[data-testid='tnt-search-multiple-button']",
-          "timeout": 15
+          "action": "click_shadow",
+          "host_selector": "mc-button[data-test='track-button']",
+          "selector": "button[aria-label='跟踪']",
+          "timeout": 15,
+          "comment": "点击跟踪按钮发起查询"
         }
       ],
       "scrape": {
@@ -146,7 +125,7 @@
       },
       "output": {
         "format": "json",
-        "path": "output/cargo/cargo_tracking.json"
+        "path": "output/maersk/maersk_tracking.json"
       }
     }
   ]

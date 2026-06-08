@@ -21,7 +21,7 @@
     "edge.extra_args": "直启模式追加启动参数数组（可选）。"
   },
   "browser": "edge",
-  "base_url": "https://www.cma-cgm.com/",
+  "base_url": "https://www.cma-cgm.com/ebusiness/tracking/search",
   "startup_navigate": false,
   "auto_recover_browser_context": true,
   "keep_browser_open": false,
@@ -32,7 +32,7 @@
     "platform": "Win32",
     "timezone": "Asia/Shanghai",
     "user_agent": "",
-    "user_data_dir": "C:/fcn/MyEdgeData",
+    "user_data_dir": "C:/fcn/MyEdgeData2",
     "attach_existing": false,
     "debugger_address": "127.0.0.1:9222"
   },
@@ -47,12 +47,27 @@
   },
   "default_timeout": 15,
   "download_dir": "output/cma/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Status",
+        "Date",
+        "Location"
+      ],
+      "text_contains": [
+        "shipment was not found",
+        "please modify your search",
+        "no result",
+        "not found"
+      ]
+    }
+  },
   "log": {
     "retention_days": 30
   },
 "login": {
     "enabled": false,
-    "url": "https://www.cma-cgm.com/",
+    "url": "https://www.cma-cgm.com/ebusiness/tracking/search",
     "fields": [],
     "captcha": {
       "type": "slider",
@@ -91,6 +106,8 @@
           "action": "goto",
           "url": "https://www.cma-cgm.com/ebusiness/tracking/search",
           "retries": 3,
+          "abort_if_visible_selector": ".captcha__human__title",
+          "abort_if_text_contains": "Access is temporarily restricted",
           "verify_by": "css",
           "verify_selector": "#Reference, input[name='SearchViewModel.Reference'], input.k-input-inner.duplicatecheck.bookingCheck, #track-number, input[id*='track'][type='text'], input[name*='track'][type='text'], input[placeholder*='Container'], input[aria-label*='Container']",
           "timeout": 20,
@@ -134,11 +151,11 @@
           "comment": "尝试展开历史轨迹（元素延迟出现时轮询点击）"
         },
         {
-          "action": "wait",
+          "action": "click_if_exists",
           "by": "xpath",
           "selector": "//a[@aria-label='Hide Previous Moves'] | //a[normalize-space()='Hide Previous Moves'] | //a[contains(@class,'k-svg-i-caret-alt-down') and contains(@class,'k-icon')]",
-          "timeout": 20,
-          "comment": "确认历史轨迹已展开（按钮状态切换为Hide Previous Moves）"
+          "timeout": 6,
+          "comment": "若已展开则可见 Hide 按钮，检测不到时继续，不阻断抓取"
         },
         {
           "action": "sleep",
@@ -149,6 +166,13 @@
       "scrape": {
         "list_by": "css",
         "list_selector": "table.k-grid-table tbody.k-table-tbody tr.k-table-row",
+        "allow_empty": true,
+        "no_data_selectors": [
+          "#trackingAlertError.alert-error",
+          "#trackingAlertError[style*='display:flex']",
+          "#trackingAlertError .alert-content b",
+          ".alert-error[role='alert']"
+        ],
         "global_fields": [
           {
             "name": "ArrivedAtPODTime",

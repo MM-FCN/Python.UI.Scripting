@@ -16,10 +16,10 @@ if "%EDGE_EXE%"=="" (
     exit /b 1
 )
 
-set "PROFILE_DIR=C:\fcn\MyEdgeData"
+set "PROFILE_DIR=C:\MyEdgeData2"
 if not exist "%PROFILE_DIR%" mkdir "%PROFILE_DIR%"
 
-set "TARGET_URL=https://www.cma-cgm.com/ebusiness/tracking/search"
+set "TARGET_URL=https://www.cma-cgm.com"
 if not "%~1"=="" set "TARGET_URL=%~1"
 
 echo [INFO] Starting Edge (CMA) with remote debugging port 9222...

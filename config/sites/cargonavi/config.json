@@ -37,6 +37,11 @@
       "name": "air_transport_information",
       "navigation_steps": [
         {
+          "action": "sleep",
+          "seconds": 15,
+          "comment": "页面加载较慢，先固定等待15秒"
+        },
+        {
           "action": "switch_to_frame",
           "by": "name",
           "selector": "showpage",

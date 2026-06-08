@@ -1,0 +1,130 @@
+{
+  "browser": "edge",
+  "base_url": "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do",
+  "default_timeout": 15,
+  "download_dir": "output/hyundai/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Origin",
+        "Destination"
+      ],
+      "text_contains": [
+        "container number is invalid. please try it again with correct number",
+        "invalid value",
+        "no data",
+        "no result",
+        "not found"
+      ]
+    }
+  },
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "hyundai-tracking",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 10,
+          "comment": "页面加载较慢，先固定等待"
+        },
+        {
+          "action": "type",
+          "by": "css",
+          "selector": "input[name='srchCntrNo1']",
+          "value": "{{ContainerNo}}",
+          "timeout": 20,
+          "clear_first": true,
+          "comment": "输入箱号到 Hyundai 查询框"
+        },
+        {
+          "action": "click",
+          "by": "css",
+          "selector": "button.btn.line.medium[onclick='search()']",
+          "timeout": 15,
+          "comment": "点击Retrieve按钮执行查询"
+        }
+      ],
+      "scrape": {
+        "list_by": "xpath",
+        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[normalize-space()='Origin'] and .//thead//div[normalize-space()='Destination']]//tbody/tr",
+        "allow_empty": true,
+        "no_data_selectors": [
+          ".input .icon.red.emphasis",
+          ".icon.red.emphasis"
+        ],
+        "fields": [
+          {
+            "name": "RowType",
+            "by": "css",
+            "selector": "th .text",
+            "attr": "text"
+          },
+          {
+            "name": "Origin",
+            "by": "css",
+            "selector": "td:nth-child(2) .text",
+            "attr": "text"
+          },
+          {
+            "name": "LoadingPort",
+            "by": "css",
+            "selector": "td:nth-child(3) .text",
+            "attr": "text"
+          },
+          {
+            "name": "TSPort",
+            "by": "css",
+            "selector": "td:nth-child(4) .text",
+            "attr": "text"
+          },
+          {
+            "name": "DischargingPort",
+            "by": "css",
+            "selector": "td:nth-child(5) .text",
+            "attr": "text"
+          },
+          {
+            "name": "Destination",
+            "by": "css",
+            "selector": "td:nth-child(6) .text",
+            "attr": "text"
+          }
+        ],
+        "max_pages": 1
+      },
+      "output": {
+        "format": "json",
+        "path": "output/hyundai/hyundai_tracking.json"
+      }
+    }
+  ]
+}

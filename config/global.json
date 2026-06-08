@@ -4,19 +4,51 @@
       "enabled_by_default": "是否默认启用轮询模式；当未传 --site/--config/--all-sites 时会自动进入 watch。",
       "interval_seconds": "轮询间隔（秒）。",
       "input_root": "轮询输入目录，按 input/<site>/*.json 扫描。",
+      "input_done_retention_days": "input_done 归档文件保留天数；超过天数的归档文件会自动清理。",
       "push_timeout_seconds": "回调推送 HTTP 超时时间（秒）。",
       "push_retries": "回调推送失败后的重试次数（不含首次请求）。",
       "push_verify_ssl": "回调推送是否校验 HTTPS 证书；false 可跳过自签名证书校验。",
-      "sites": "默认监听的站点列表（目录名），如 cargo、cargonavi。"
+      "sites": "默认监听的站点列表（目录名），如 cargo、cargonavi。",
+      "cargo_fallback": "cargo 输入按箱号兜底抓取策略：cargo 无数据则转 cma，再转 hapag。",
+      "cargo_fallback.enabled": "是否启用 cargo 箱号跨站点兜底链路。",
+      "cargo_fallback.trigger_site": "仅当输入文件所属站点等于该值时启用兜底。默认 cargo。",
+      "cargo_fallback.sites_chain": "按顺序尝试的站点列表，命中数据即停止。",
+      "cargo_fallback.site_error_retries": "单个站点执行报错时重试次数（不含首次），仅在得到有数据或明确无数据后才会决定是否继续下个站点。",
+      "cargo_fallback.reuse_trigger_site_session": "是否复用触发站点（如 cargo）单浏览器会话串行处理整批箱号；false 时按并发设置处理。",
+      "parallel": "批量输入并行抓取配置。",
+      "parallel.enabled": "是否启用批量并行模式。",
+      "parallel.max_workers": "允许启动的最大 worker 数量。",
+      "parallel.chunk_size": "每个 worker 处理的单号数量；<=0 时按总数自动平均分配。",
+      "parallel.skip_successful_items": "是否跳过历史成功单号，避免重复爬取。",
+      "parallel.state_db_path": "单号状态库路径（SQLite），记录每个单号的爬取结果。"
     },
     "enabled_by_default": true,
     "interval_seconds": 10,
     "input_root": "input",
+    "input_done_retention_days": 30,
     "push_timeout_seconds": 30,
     "push_retries": 1,
     "push_verify_ssl": false,
     "sites": [
-      "cma"
-    ]
+      "cargonavi"
+    ],
+    "cargo_fallback": {
+      "enabled": true,
+      "trigger_site": "cargo",
+      "sites_chain": [
+        "cargo",
+        "hyundai",
+        "msc"
+      ],
+      "site_error_retries": 2,
+      "reuse_trigger_site_session": false
+    },
+    "parallel": {
+      "enabled": true,
+      "max_workers": 6,
+      "chunk_size": 0,
+      "skip_successful_items": true,
+      "state_db_path": "state/crawl_item_state.db"
+    }
   }
 }

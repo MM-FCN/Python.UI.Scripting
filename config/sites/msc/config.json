@@ -1,0 +1,139 @@
+{
+  "browser": "edge",
+  "base_url": "https://www.msc.com",
+  "default_timeout": 15,
+  "download_dir": "output/msc/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Date",
+        "Description"
+      ],
+      "text_contains": [
+        "no results found for this bill of lading number",
+        "please recheck that the number is complete and correct and in the b/l format",
+        "no data",
+        "no result",
+        "not found"
+      ]
+    }
+  },
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "msc-tracking",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 10,
+          "comment": "页面加载较慢，先固定等待"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "css",
+          "selector": "#onetrust-accept-btn-handler",
+          "comment": "如存在Cookie弹窗则点击Accept All",
+          "timeout": 8
+        },
+        {
+          "action": "type",
+          "by": "css",
+          "selector": "input.msc-quick-access-box__search",
+          "value": "{{ContainerNo}}",
+          "timeout": 20,
+          "clear_first": true,
+          "comment": "输入提单/箱号到MSC搜索框"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "css",
+          "selector": "button.msc-cta-icon-simple.msc-search-autocomplete__search",
+          "timeout": 8,
+          "comment": "优先点击搜索按钮触发tracking跳转"
+        },
+        {
+          "action": "press_enter_if_exists",
+          "by": "css",
+          "selector": "input.msc-quick-access-box__search",
+          "timeout": 12,
+          "comment": "若按钮未触发则在输入框按回车兜底提交"
+        }
+      ],
+      "scrape": {
+        "list_by": "css",
+        "list_selector": ".msc-flow-tracking__steps .msc-flow-tracking__port .msc-flow-tracking__step",
+        "allow_empty": true,
+        "no_data_selectors": [
+          ".msc-search-autocomplete__no-results",
+          ".msc-search-autocomplete__empty",
+          ".msc-flow-tracking__tracking:empty"
+        ],
+        "fields": [
+          {
+            "name": "Date",
+            "by": "css",
+            "selector": ".msc-flow-tracking__cell--two .data-value",
+            "attr": "text"
+          },
+          {
+            "name": "Location",
+            "by": "css",
+            "selector": ".msc-flow-tracking__cell--three .data-value",
+            "attr": "text"
+          },
+          {
+            "name": "Description",
+            "by": "css",
+            "selector": ".msc-flow-tracking__cell--four .data-value",
+            "attr": "text"
+          },
+          {
+            "name": "Detail",
+            "by": "css",
+            "selector": ".msc-flow-tracking__cell--five .data-value",
+            "attr": "text"
+          },
+          {
+            "name": "EquipmentHandling",
+            "by": "css",
+            "selector": ".msc-flow-tracking__cell--six .data-value",
+            "attr": "text"
+          }
+        ],
+        "max_pages": 1
+      },
+      "output": {
+        "format": "json",
+        "path": "output/msc/msc_tracking.json"
+      }
+    }
+  ]
+}

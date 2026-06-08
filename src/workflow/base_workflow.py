@@ -6,13 +6,12 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# import cv2
-cv2 = None
-
+import cv2
 import numpy as np
 from PIL import Image
 from selenium import webdriver
@@ -35,6 +34,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 
+from src.logging_utils import cleanup_old_logs
+
 
 BY_MAP = {
     "id": By.ID,
@@ -56,6 +57,7 @@ class WorkflowCrawler:
         self.driver: Optional[webdriver.Remote] = None
         self._browser_name: str = str(config.get("browser", "firefox")).strip().lower()
         self._attached_existing_browser: bool = False
+        self._runtime_edge_profile_dir: str = ""
         self.default_timeout = int(config.get("default_timeout", 15))
         self._download_dir: str = str(
             Path(config.get("download_dir", "output/downloads")).resolve()
@@ -63,11 +65,24 @@ class WorkflowCrawler:
         self.popup_data: List[Dict[str, Any]] = []  # 存储从弹出框爬取的数据
         self._current_task_name: str = ""
 
-    def _opencv_available(self) -> bool:
-        if cv2 is not None:
-            return True
-        print("[CAPTCHA] OpenCV is not installed; image-based captcha detection is disabled.")
-        return False
+    def _get_output_retention_days(self) -> int:
+        output_cfg = self.config.get("output", {})
+        if isinstance(output_cfg, dict) and output_cfg.get("retention_days") is not None:
+            raw = output_cfg.get("retention_days")
+        else:
+            raw = self.config.get("log", {}).get("retention_days", 30)
+
+        try:
+            days = int(raw)
+        except Exception:
+            days = 30
+        return max(1, days)
+
+    def _cleanup_output_dir(self, folder: Path) -> None:
+        try:
+            cleanup_old_logs(folder, keep_days=self._get_output_retention_days())
+        except Exception as e:
+            print(f"[OUTPUT] Retention cleanup skipped for {folder}: {e}")
 
     def _safe_current_url(self) -> str:
         try:
@@ -115,6 +130,9 @@ class WorkflowCrawler:
                 else:
                     print("[BROWSER] Closing browser session...")
                     self.driver.quit()
+                    self._cleanup_runtime_edge_profile_dir()
+            else:
+                self._cleanup_runtime_edge_profile_dir()
 
     def _run_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """在同一登录会话中顺序执行多个页面任务。"""
@@ -168,6 +186,7 @@ class WorkflowCrawler:
         print(f"[BROWSER] Creating {browser} options...")
         print(f"[BROWSER] Setting download directory: {self._download_dir}")
         Path(self._download_dir).mkdir(parents=True, exist_ok=True)
+        self._cleanup_output_dir(Path(self._download_dir))
 
         try:
             if browser == "edge":
@@ -185,6 +204,9 @@ class WorkflowCrawler:
                 attach_existing = bool(
                     edge_cfg.get("attach_existing", self.config.get("edge_attach_existing", False))
                 )
+                edge_binary_location = str(
+                    edge_cfg.get("binary_location", self.config.get("edge_binary_location", ""))
+                ).strip()
                 debugger_address = str(
                     edge_cfg.get("debugger_address", self.config.get("edge_debugger_address", ""))
                 ).strip()
@@ -208,6 +230,14 @@ class WorkflowCrawler:
                 if edge_accept_language:
                     options.add_argument(f"--lang={edge_accept_language.split(',')[0].strip()}")
 
+                if edge_binary_location:
+                    expanded_edge_binary = os.path.expanduser(os.path.expandvars(edge_binary_location))
+                    if Path(expanded_edge_binary).exists():
+                        options.binary_location = expanded_edge_binary
+                        print(f"[BROWSER] Edge binary override: {expanded_edge_binary}")
+                    else:
+                        print(f"[BROWSER] Edge binary override not found, ignored: {expanded_edge_binary}")
+
                 # Keep direct-launch behavior closer to a regular user browser profile.
                 # In attach mode, some experimental options are rejected by msedgedriver.
                 if edge_stealth_mode and not attach_existing:
@@ -226,6 +256,12 @@ class WorkflowCrawler:
                         pass
                     options.add_argument(f"--user-data-dir={edge_user_data_dir}")
                     print(f"[BROWSER] Edge direct mode using user data dir: {edge_user_data_dir}")
+                elif not attach_existing:
+                    # Use an isolated temporary profile so automation does not attach to an existing Edge process.
+                    runtime_profile = tempfile.mkdtemp(prefix="edge-crawler-", dir=str(Path(tempfile.gettempdir())))
+                    self._runtime_edge_profile_dir = runtime_profile
+                    options.add_argument(f"--user-data-dir={runtime_profile}")
+                    print(f"[BROWSER] Edge direct mode using isolated runtime profile: {runtime_profile}")
 
                 for arg in edge_extra_args:
                     arg_str = str(arg).strip()
@@ -249,11 +285,11 @@ class WorkflowCrawler:
                     options.add_experimental_option("debuggerAddress", debugger_address)
                     print(f"[BROWSER] Edge attach mode enabled: debuggerAddress={debugger_address}")
                 self._attached_existing_browser = attach_existing
-
                 print("[BROWSER] Resolving msedgedriver...")
                 edge_exe = self._resolve_edgedriver_path()
                 service = EdgeService(edge_exe)
                 self.driver = webdriver.Edge(service=service, options=options)
+
                 if self.headless and edge_stealth_mode and edge_headless_stealth and not attach_existing:
                     self._apply_edge_headless_overrides(edge_cfg)
             else:
@@ -297,6 +333,17 @@ class WorkflowCrawler:
             raise
 
         print(f"[BROWSER] {browser} started successfully!")
+
+    def _cleanup_runtime_edge_profile_dir(self) -> None:
+        if not self._runtime_edge_profile_dir:
+            return
+        try:
+            shutil.rmtree(self._runtime_edge_profile_dir, ignore_errors=True)
+            print(f"[BROWSER] Runtime Edge profile cleaned: {self._runtime_edge_profile_dir}")
+        except Exception as e:
+            print(f"[BROWSER] Runtime Edge profile cleanup skipped: {e}")
+        finally:
+            self._runtime_edge_profile_dir = ""
 
     def _bootstrap_stealth_js(self) -> None:
         """Inject stealth JS right after driver init, before any business page navigation."""
@@ -1248,6 +1295,171 @@ class WorkflowCrawler:
                 except Exception:
                     pass
 
+    def _get_auto_captcha_cfg(self) -> Optional[Dict[str, Any]]:
+        """Return captcha config when auto watch during steps is enabled."""
+        captcha_cfg = self.config.get("login", {}).get("captcha", {})
+        if not isinstance(captcha_cfg, dict) or not captcha_cfg:
+            return None
+        if not bool(captcha_cfg.get("auto_check_during_steps", False)):
+            return None
+        return captcha_cfg
+
+    def _auto_check_captcha(self, context: str = "") -> bool:
+        """Best-effort captcha check used by long-running actions."""
+        captcha_cfg = self._get_auto_captcha_cfg()
+        if not captcha_cfg:
+            return False
+        try:
+            return self._handle_captcha_if_exists(captcha_cfg, context=context)
+        except Exception as e:
+            marker = f" ({context})" if context else ""
+            print(f"[CAPTCHA] Auto check skipped due to error{marker}: {type(e).__name__}: {e}")
+            return False
+
+    def _sleep_with_captcha_watch(self, seconds: float, context: str = "") -> None:
+        """Sleep in short chunks so intermittent captcha can be handled promptly."""
+        total = max(0.0, float(seconds or 0))
+        if total <= 0:
+            return
+
+        captcha_cfg = self._get_auto_captcha_cfg()
+        if not captcha_cfg:
+            time.sleep(total)
+            return
+
+        interval = float(captcha_cfg.get("monitor_interval_seconds", 0.6) or 0.6)
+        if interval <= 0:
+            interval = 0.6
+
+        end_time = time.time() + total
+        while True:
+            remaining = end_time - time.time()
+            if remaining <= 0:
+                return
+            self._auto_check_captcha(context=context or "during sleep")
+            time.sleep(min(interval, remaining))
+
+    def _is_abort_page_detected(self, selector: str, text_contains: str) -> bool:
+        if not self.driver:
+            return False
+        sel = str(selector or "").strip()
+        txt = str(text_contains or "").strip().lower()
+        if not sel and not txt:
+            return False
+
+        try:
+            if sel:
+                elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                if not elems:
+                    return False
+                for el in elems:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                    except Exception:
+                        continue
+                    if not txt:
+                        return True
+                    try:
+                        content = (el.text or "").strip().lower()
+                    except Exception:
+                        content = ""
+                    if txt and txt in content:
+                        return True
+                return False
+
+            if txt:
+                page_text = ""
+                try:
+                    page_text = (self.driver.find_element(By.TAG_NAME, "body").text or "").lower()
+                except Exception:
+                    page_text = ""
+                return bool(page_text and txt in page_text)
+        except Exception:
+            return False
+        return False
+
+    def _wait_visible_with_captcha_watch(
+        self,
+        by: str,
+        selector: str,
+        timeout: Optional[int] = None,
+        context: str = "",
+    ) -> Any:
+        """Wait for visible element while checking captcha in the background loop."""
+        total_timeout = int(timeout or self.default_timeout)
+        by_value = self._to_by(by)
+        end_time = time.time() + total_timeout
+        poll = 0.25
+
+        while time.time() < end_time:
+            self._auto_check_captcha(context=context or f"wait visible: {selector}")
+            try:
+                elements = self.driver.find_elements(by_value, selector)
+                for el in elements:
+                    if el.is_displayed():
+                        return el
+            except Exception:
+                pass
+            time.sleep(poll)
+
+        print(f"[WAIT] visible timeout: by={by}, selector={selector}, timeout={total_timeout}s")
+        print(f"[WAIT] URL={self._safe_current_url()}")
+        raise TimeoutException(f"Element not visible within timeout: by={by}, selector={selector}")
+
+    def _wait_invisible_with_captcha_watch(
+        self,
+        by: str,
+        selector: str,
+        timeout: Optional[int] = None,
+        context: str = "",
+    ) -> bool:
+        """Wait for element invisible while checking captcha in the background loop."""
+        total_timeout = int(timeout or self.default_timeout)
+        by_value = self._to_by(by)
+        end_time = time.time() + total_timeout
+        poll = 0.25
+
+        while time.time() < end_time:
+            self._auto_check_captcha(context=context or f"wait invisible: {selector}")
+            try:
+                elements = self.driver.find_elements(by_value, selector)
+                if not elements:
+                    return True
+                if all(not el.is_displayed() for el in elements):
+                    return True
+            except Exception:
+                return True
+            time.sleep(poll)
+
+        print(f"[WAIT] invisible timeout: by={by}, selector={selector}, timeout={total_timeout}s")
+        print(f"[WAIT] URL={self._safe_current_url()}")
+        raise TimeoutException(f"Element still visible after timeout: by={by}, selector={selector}")
+
+    def _wait_url_contains_with_captcha_watch(
+        self,
+        keyword: str,
+        timeout: Optional[int] = None,
+        context: str = "",
+    ) -> None:
+        """Wait for URL contains while checking captcha in the background loop."""
+        total_timeout = int(timeout or self.default_timeout)
+        end_time = time.time() + total_timeout
+        poll = 0.25
+        marker = str(keyword or "")
+
+        while time.time() < end_time:
+            self._auto_check_captcha(context=context or f"wait url contains: {marker}")
+            try:
+                current_url = self._safe_current_url()
+                if marker in current_url:
+                    return
+            except Exception:
+                pass
+            time.sleep(poll)
+
+        raise TimeoutException(f"URL did not contain '{marker}' within {total_timeout}s")
+
     def _recover_captcha(self, cfg: Dict[str, Any]) -> None:
         """验证码失败后尝试刷新/重开验证码。"""
         refresh_selectors = cfg.get("refresh_selector", "")
@@ -1313,8 +1525,6 @@ class WorkflowCrawler:
 
     def _detect_gap_canvas_js(self, canvas_selector: str, piece_img_selector: str) -> Optional[int]:
         """通过 JS 读取 canvas 背景图和拼图块图像，OpenCV 模板匹配找缺口位置，返回页面绝对 X 坐标（CSS 像素）。"""
-        if not self._opencv_available():
-            return None
         try:
             # 读取 canvas 图像和位置信息
             canvas_info = self.driver.execute_script(f"""
@@ -1394,8 +1604,6 @@ class WorkflowCrawler:
 
     def _detect_gap_by_edge_canvas(self, bg_img: np.ndarray) -> Optional[int]:
         """边缘检测：在背景图中找缺口列位置（排除最左侧初始拼图区域）。"""
-        if not self._opencv_available():
-            return None
         try:
             gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
             blurred = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -1416,8 +1624,6 @@ class WorkflowCrawler:
 
     def _detect_slider_gap(self, bg_selector: Optional[str], piece_selector: Optional[str]) -> Optional[int]:
         """截图背景和滑块拼图，用模板匹配找到缺口的 X 坐标（页面绝对坐标）。"""
-        if not self._opencv_available():
-            return None
         try:
             # 截取整页截图转为 numpy
             screenshot = self.driver.get_screenshot_as_png()
@@ -1459,8 +1665,6 @@ class WorkflowCrawler:
 
     def _detect_gap_by_edge(self, bg_img: np.ndarray, bg_rect: Dict) -> Optional[int]:
         """用边缘检测在背景图上找缺口列位置。"""
-        if not self._opencv_available():
-            return None
         try:
             gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
             blurred = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -1490,45 +1694,116 @@ class WorkflowCrawler:
         }
 
     def _drag_slider(self, slider: Any, distance: int) -> None:
-        """模拟人工拖拽：正弦 ease-in-out 加速曲线 + 随机抖动，更接近真人行为。"""
-        import math
-        actions = ActionChains(self.driver)
-        actions.click_and_hold(slider)
-        # 按下后先停顿更长时间，模拟真人「握住」
-        actions.pause(round(np.random.uniform(0.35, 0.65), 3))
+                """模拟人工拖拽：优先用 JS 事件轨迹，失败时回退 ActionChains。"""
+                import math
 
-        # 生成正弦 ease-in-out 轨迹，步数更多使轨迹更细腻
-        n_steps = max(40, distance // 3)
-        prev_x = 0
-        for i in range(1, n_steps + 1):
-            t = i / n_steps
-            # ease-in-out sine: 慢 → 快 → 慢
-            eased = (1 - math.cos(math.pi * t)) / 2
-            cur_x = int(distance * eased)
-            dx = cur_x - prev_x
-            if dx > 0:
-                # Y 轴抖动范围扩大，更像真人手颤
-                jitter_y = int(np.random.choice([-2, -1, -1, 0, 0, 0, 1, 1, 2]))
-                actions.move_by_offset(dx, jitter_y)
-                # 整体速度降低：delay 基数从 0.006~0.015 提高到 0.012~0.025
-                speed = eased * (1 - eased) * 4
-                delay = round(np.random.uniform(0.012, 0.025) / (speed + 0.1), 4)
-                actions.pause(min(delay, 0.10))
-                prev_x = cur_x
+                n_steps = max(40, distance // 3)
+                jitter_values = [-2, -1, -1, 0, 0, 0, 1, 1, 2]
+                x_points: list[int] = []
+                y_points: list[int] = []
+                prev_x = 0
+                for i in range(1, n_steps + 1):
+                        t = i / n_steps
+                        eased = (1 - math.cos(math.pi * t)) / 2
+                        cur_x = int(distance * eased)
+                        if cur_x > prev_x:
+                                x_points.append(cur_x)
+                                y_points.append(int(np.random.choice(jitter_values)))
+                                prev_x = cur_x
 
-        # 确保到达目标（补足误差）
-        if prev_x < distance:
-            actions.move_by_offset(distance - prev_x, 0)
-            actions.pause(0.04)
+                if prev_x < distance:
+                        x_points.append(int(distance))
+                        y_points.append(0)
 
-        # 轻微超冲再回正，模拟真人校准
-        overshoot = int(np.random.uniform(4, 9))
-        actions.move_by_offset(overshoot, 0)
-        actions.pause(round(np.random.uniform(0.15, 0.28), 3))
-        actions.move_by_offset(-overshoot, 0)
-        actions.pause(round(np.random.uniform(0.18, 0.35), 3))
-        actions.release()
-        actions.perform()
+                overshoot = int(np.random.uniform(4, 9))
+                x_points.append(int(distance + overshoot))
+                y_points.append(0)
+                x_points.append(int(distance))
+                y_points.append(0)
+
+                # 优先使用脚本派发鼠标事件，减少 WebDriver move_by_offset 对特定页面的影响。
+                try:
+                        self.driver.execute_script(
+                                """
+                                const slider = arguments[0];
+                                const xPoints = arguments[1];
+                                const yPoints = arguments[2];
+                                const holdMs = arguments[3];
+
+                                if (!slider || !xPoints || !xPoints.length) {
+                                    return false;
+                                }
+
+                                const center = (el) => {
+                                    const r = el.getBoundingClientRect();
+                                    return {
+                                        x: Math.round(r.left + r.width / 2),
+                                        y: Math.round(r.top + r.height / 2),
+                                    };
+                                };
+
+                                const fire = (type, x, y) => {
+                                    const evt = new MouseEvent(type, {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window,
+                                        clientX: x,
+                                        clientY: y,
+                                        screenX: x,
+                                        screenY: y,
+                                        button: 0,
+                                        buttons: type === 'mouseup' ? 0 : 1,
+                                    });
+                                    slider.dispatchEvent(evt);
+                                    document.dispatchEvent(evt);
+                                };
+
+                                const start = center(slider);
+                                fire('mousemove', start.x, start.y);
+                                fire('mousedown', start.x, start.y);
+
+                                const blockUntil = performance.now() + Math.max(0, holdMs);
+                                while (performance.now() < blockUntil) {
+                                    // busy wait for short human-like hold
+                                }
+
+                                for (let i = 0; i < xPoints.length; i += 1) {
+                                    fire('mousemove', start.x + xPoints[i], start.y + yPoints[i]);
+                                }
+
+                                fire('mouseup', start.x + xPoints[xPoints.length - 1], start.y + yPoints[yPoints.length - 1]);
+                                return true;
+                                """,
+                                slider,
+                                x_points,
+                                y_points,
+                                int(np.random.uniform(350, 650)),
+                        )
+                        time.sleep(round(np.random.uniform(0.18, 0.35), 3))
+                        return
+                except Exception:
+                        pass
+
+                actions = ActionChains(self.driver)
+                actions.click_and_hold(slider)
+                actions.pause(round(np.random.uniform(0.35, 0.65), 3))
+
+                current_x = 0
+                for idx, target_x in enumerate(x_points):
+                        dx = int(target_x) - int(current_x)
+                        if dx <= 0:
+                                continue
+                        jitter_y = int(y_points[idx])
+                        actions.move_by_offset(dx, jitter_y)
+                        t = min(1.0, max(0.0, float(target_x) / max(1.0, float(distance))))
+                        speed = ((1 - math.cos(math.pi * t)) / 2) * (1 - (1 - math.cos(math.pi * t)) / 2) * 4
+                        delay = round(np.random.uniform(0.012, 0.025) / (speed + 0.1), 4)
+                        actions.pause(min(delay, 0.10))
+                        current_x = int(target_x)
+
+                actions.pause(round(np.random.uniform(0.18, 0.35), 3))
+                actions.release()
+                actions.perform()
 
     def _wait_login_success(self, login_cfg: Dict[str, Any]) -> None:
         wait_success = login_cfg.get("wait_success", {})
@@ -1561,8 +1836,8 @@ class WorkflowCrawler:
 
     def _perform_steps(self, steps: List[Dict[str, Any]]) -> None:
         print(f"[STEPS] Total steps to perform: {len(steps)}")
-        captcha_cfg = self.config.get("login", {}).get("captcha", {})
-        auto_check_captcha = bool(captcha_cfg.get("auto_check_during_steps", False)) if isinstance(captcha_cfg, dict) else False
+        captcha_cfg = self._get_auto_captcha_cfg() or {}
+        auto_check_captcha = bool(captcha_cfg)
         for i, step in enumerate(steps, start=1):
             next_step = steps[i] if i < len(steps) else None
             runtime_step = dict(step)
@@ -1581,6 +1856,8 @@ class WorkflowCrawler:
                 if isinstance(next_step, dict):
                     runtime_step["_next_step"] = next_step
                 self._do_action(runtime_step)
+                if auto_check_captcha:
+                    self._handle_captcha_if_exists(captcha_cfg, context=f"after step {i} ({action})")
                 print(f"[STEP {i}] action={action} done")
             except Exception as e:
                 print(f"[ERROR] Step {i} failed: action={action}, err={type(e).__name__}: {e}")
@@ -1662,6 +1939,12 @@ class WorkflowCrawler:
                     raise ValueError(f"Unsupported frame switch method: {by}")
             elif action == "click":
                 self._click_with_post_verify(step)
+            elif action == "click_shadow":
+                host_selector = str(step.get("host_selector", "")).strip()
+                target_selector = str(step.get("selector", "")).strip()
+                if not host_selector or not target_selector:
+                    raise ValueError("click_shadow requires host_selector and selector")
+                self._click_shadow(host_selector, target_selector, timeout=step.get("timeout"))
             elif action == "click_if_exists":
                 by = self._to_by(step["by"])
                 selector = step["selector"]
@@ -1674,6 +1957,7 @@ class WorkflowCrawler:
                 for round_idx in range(1, max_rounds + 1):
                     end_time = time.time() + max(0.0, timeout)
                     while True:
+                        self._auto_check_captcha(context=f"during click_if_exists ({selector})")
                         elements = self.driver.find_elements(by, selector)
                         for el in elements:
                             try:
@@ -1703,7 +1987,7 @@ class WorkflowCrawler:
                             break
                         if time.time() >= end_time:
                             break
-                        time.sleep(0.25)
+                        self._sleep_with_captcha_watch(0.25, context=f"during click_if_exists ({selector})")
 
                     if clicked:
                         break
@@ -1721,7 +2005,12 @@ class WorkflowCrawler:
 
                     if next_by and next_selector:
                         try:
-                            self._wait_visible(str(next_by), str(next_selector), timeout=next_check_timeout)
+                            self._wait_visible_with_captcha_watch(
+                                str(next_by),
+                                str(next_selector),
+                                timeout=next_check_timeout,
+                                context=f"click_if_exists next-step check ({selector})",
+                            )
                             print(
                                 f"[STEP] click_if_exists timeout round {round_idx}/{max_rounds}; "
                                 "next step element is already visible, continue"
@@ -1758,18 +2047,74 @@ class WorkflowCrawler:
                     clear_first=step.get("clear_first", True),
                     timeout=step.get("timeout"),
                 )
+            elif action == "type_shadow":
+                text = step.get("text", "")
+                if step.get("env"):
+                    text = os.getenv(step["env"], "")
+                if not text and step.get("value"):
+                    text = step["value"]
+                host_selector = str(step.get("host_selector", "")).strip()
+                target_selector = str(step.get("selector", "")).strip()
+                if not host_selector or not target_selector:
+                    raise ValueError("type_shadow requires host_selector and selector")
+                print(f"[STEP] type_shadow input value: {text}")
+                self._type_text_shadow(
+                    host_selector=host_selector,
+                    target_selector=target_selector,
+                    text=text,
+                    clear_first=step.get("clear_first", True),
+                    timeout=step.get("timeout"),
+                )
             elif action == "press_enter":
                 el = self._wait_clickable(step["by"], step["selector"], step.get("timeout"))
                 el.send_keys(Keys.ENTER)
+            elif action == "press_enter_if_exists":
+                by = self._to_by(step["by"])
+                selector = step["selector"]
+                timeout = float(step.get("timeout", 0))
+                end_time = time.time() + max(0.0, timeout)
+                sent = False
+                while True:
+                    elements = self.driver.find_elements(by, selector)
+                    for el in elements:
+                        try:
+                            if el.is_displayed() and el.is_enabled():
+                                el.send_keys(Keys.ENTER)
+                                print(f"[STEP] press_enter_if_exists sent ENTER: {selector}")
+                                sent = True
+                                break
+                        except Exception:
+                            continue
+                    if sent:
+                        break
+                    if time.time() >= end_time:
+                        break
+                    self._sleep_with_captcha_watch(0.2, context=f"during press_enter_if_exists ({selector})")
+                if not sent:
+                    print(f"[STEP] press_enter_if_exists no target found: {selector}")
             elif action == "select":
                 self._select_option(step)
             elif action == "wait":
-                self._wait_visible(step["by"], step["selector"], timeout=step.get("timeout"))
+                self._wait_visible_with_captcha_watch(
+                    step["by"],
+                    step["selector"],
+                    timeout=step.get("timeout"),
+                    context=f"step wait ({step.get('selector', '')})",
+                )
             elif action == "wait_invisible":
-                self._wait_invisible(step["by"], step["selector"], timeout=step.get("timeout"))
+                self._wait_invisible_with_captcha_watch(
+                    step["by"],
+                    step["selector"],
+                    timeout=step.get("timeout"),
+                    context=f"step wait_invisible ({step.get('selector', '')})",
+                )
             elif action == "wait_url_contains":
                 timeout = int(step.get("timeout", self.default_timeout))
-                WebDriverWait(self.driver, timeout).until(EC.url_contains(step["value"]))
+                self._wait_url_contains_with_captcha_watch(
+                    step["value"],
+                    timeout=timeout,
+                    context=f"step wait_url_contains ({step.get('value', '')})",
+                )
                 print(f"[STEP] URL now contains: {step['value']}")
             elif action == "log_title":
                 try:
@@ -1783,17 +2128,30 @@ class WorkflowCrawler:
                 verify_selector = step.get("verify_selector")
                 verify_timeout = int(step.get("timeout", self.default_timeout))
                 after_goto_sleep = float(step.get("after_goto_sleep", 0))
+                abort_selector = str(step.get("abort_if_visible_selector", "")).strip()
+                abort_text = str(step.get("abort_if_text_contains", "")).strip()
                 last_err: Optional[Exception] = None
 
                 for attempt in range(1, retries + 1):
                     try:
+                        self._auto_check_captcha(context=f"before goto {url}")
                         self.driver.get(url)
                         self._override_navigator_webdriver()
                         if after_goto_sleep > 0:
-                            time.sleep(after_goto_sleep)
+                            self._sleep_with_captcha_watch(after_goto_sleep, context=f"after goto {url}")
+
+                        if self._is_abort_page_detected(abort_selector, abort_text):
+                            raise RuntimeError(
+                                f"FATAL_PAGE_BLOCKED: selector={abort_selector}, text={abort_text}"
+                            )
 
                         if verify_by and verify_selector:
-                            self._wait_visible(verify_by, verify_selector, timeout=verify_timeout)
+                            self._wait_visible_with_captcha_watch(
+                                verify_by,
+                                verify_selector,
+                                timeout=verify_timeout,
+                                context=f"verify goto {url}",
+                            )
 
                         if attempt > 1:
                             print(f"[STEP] Navigated to: {url} (attempt {attempt}/{retries})")
@@ -1803,12 +2161,43 @@ class WorkflowCrawler:
                         break
                     except Exception as e:
                         last_err = e
+                        err_text = str(e).lower()
+                        is_fatal_blocked = "fatal_page_blocked" in err_text
+                        is_session_lost = isinstance(e, (NoSuchWindowException, InvalidSessionIdException)) or any(
+                            marker in err_text
+                            for marker in [
+                                "invalid session id",
+                                "target window already closed",
+                                "web view not found",
+                                "no such window",
+                            ]
+                        )
+
+                        if is_session_lost and attempt < retries:
+                            print(
+                                f"[STEP] goto session lost on attempt {attempt}/{retries}: "
+                                f"{type(e).__name__}. Recovering browser context..."
+                            )
+                            try:
+                                self._ensure_browser_context(context=f"goto retry {attempt}/{retries}")
+                            except Exception:
+                                self._restart_browser()
+                            self._sleep_with_captcha_watch(1, context=f"retry goto {url}")
+                            continue
+
+                        if is_fatal_blocked:
+                            print(
+                                f"[STEP] goto detected blocked page on attempt {attempt}/{retries}: "
+                                f"{type(e).__name__}: {e}. Abort retries."
+                            )
+                            raise
+
                         if attempt < retries:
                             print(
                                 f"[STEP] goto verify failed on attempt {attempt}/{retries}: "
                                 f"{type(e).__name__}: {e}. Retrying..."
                             )
-                            time.sleep(1)
+                            self._sleep_with_captcha_watch(1, context=f"retry goto {url}")
                             continue
                         raise
 
@@ -1821,7 +2210,7 @@ class WorkflowCrawler:
             elif action == "sleep":
                 secs = float(step.get("seconds", 1))
                 print(f"[STEP] Sleeping {secs}s")
-                time.sleep(secs)
+                self._sleep_with_captcha_watch(secs, context=f"step sleep {secs}s")
             elif action == "wait_download":
                 pattern = step.get("pattern", "*.xlsx")
                 timeout = int(step.get("timeout", 30))
@@ -2212,6 +2601,25 @@ class WorkflowCrawler:
                 self._wait_visible(scrape_cfg["list_by"], list_selector, timeout=scrape_cfg.get("timeout"))
             except TimeoutException:
                 if scrape_cfg.get("allow_empty", False):
+                    raw_no_data_selectors = scrape_cfg.get("no_data_selectors", [])
+                    no_data_selectors: List[str] = []
+                    if isinstance(raw_no_data_selectors, str):
+                        no_data_selectors = [s.strip() for s in raw_no_data_selectors.split(",") if s.strip()]
+                    elif isinstance(raw_no_data_selectors, list):
+                        no_data_selectors = [str(s).strip() for s in raw_no_data_selectors if str(s).strip()]
+
+                    matched_selector = ""
+                    for sel in no_data_selectors:
+                        try:
+                            elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                            if any(el.is_displayed() for el in elements):
+                                matched_selector = sel
+                                break
+                        except Exception:
+                            continue
+
+                    if matched_selector:
+                        print(f"[SCRAPE] No-data selector matched: {matched_selector}")
                     print("[SCRAPE] No list rows found within timeout; allow_empty=true, returning empty records.")
                     return all_records
                 raise
@@ -2283,11 +2691,23 @@ class WorkflowCrawler:
         if fmt == "json":
             output_path = self._append_timestamp_to_path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cleanup_output_dir(output_path.parent)
 
         # 优先使用 popup_data（从弹出框爬取的数据）
         data_to_save = self.popup_data if self.popup_data else records
         data_to_save = self._attach_request_identifiers(data_to_save)
         source = "popup_data" if self.popup_data else "records"
+
+        if bool(self.config.get("__defer_output_save", False)):
+            deferred = self.config.setdefault("__deferred_output_items", [])
+            if isinstance(deferred, list):
+                deferred.append({
+                    "output_cfg": dict(output_cfg) if isinstance(output_cfg, dict) else {},
+                    "records": data_to_save,
+                })
+            print(f"[OUTPUT] Deferred save enabled, queued records only: source={source}, count={len(data_to_save)}")
+            return
+
         print(f"[OUTPUT] Data source={source}, count={len(data_to_save)}, path={output_path}")
 
         if fmt == "txt":
@@ -2512,5 +2932,139 @@ class WorkflowCrawler:
             corrected = (element.get_attribute("value") or "")
             print(
                 f"[ACTION] type value corrected: by={by}, selector={selector}, "
+                f"before='{actual}', after='{corrected}'"
+            )
+
+    def _wait_shadow_element(
+        self,
+        host_selector: str,
+        target_selector: str,
+        timeout: Optional[int] = None,
+        require_clickable: bool = False,
+    ) -> Any:
+        timeout = int(timeout or self.default_timeout)
+        end_time = time.time() + timeout
+        poll = 0.25
+        last_state = ""
+
+        while time.time() < end_time:
+            try:
+                host = self.driver.find_element(By.CSS_SELECTOR, host_selector)
+            except Exception:
+                host = None
+
+            if host is not None:
+                try:
+                    element = self.driver.execute_script(
+                        """
+                        const host = arguments[0];
+                        const selector = arguments[1];
+                        if (!host || !host.shadowRoot) return null;
+                        return host.shadowRoot.querySelector(selector);
+                        """,
+                        host,
+                        target_selector,
+                    )
+                except Exception:
+                    element = None
+
+                if element is not None:
+                    try:
+                        visible = bool(element.is_displayed())
+                    except Exception:
+                        visible = False
+                    if require_clickable:
+                        try:
+                            clickable = visible and bool(element.is_enabled())
+                        except Exception:
+                            clickable = False
+                        if clickable:
+                            return element
+                    elif visible:
+                        return element
+                    last_state = "found_not_interactable"
+                else:
+                    last_state = "target_not_found"
+            else:
+                last_state = "host_not_found"
+
+            time.sleep(poll)
+
+        print(
+            f"[WAIT] shadow timeout: host={host_selector}, selector={target_selector}, "
+            f"timeout={timeout}s, state={last_state}"
+        )
+        print(f"[WAIT] URL={self._safe_current_url()}")
+        raise TimeoutException(
+            f"Shadow element timeout: host={host_selector}, selector={target_selector}"
+        )
+
+    def _click_shadow(self, host_selector: str, target_selector: str, timeout: Optional[int] = None) -> None:
+        element = self._wait_shadow_element(
+            host_selector,
+            target_selector,
+            timeout=timeout,
+            require_clickable=True,
+        )
+        try:
+            ActionChains(self.driver).move_to_element(element).click().perform()
+            print(
+                f"[ACTION] click_shadow success via ActionChains: "
+                f"host={host_selector}, selector={target_selector}"
+            )
+        except Exception:
+            self.driver.execute_script("arguments[0].click();", element)
+            print(
+                f"[ACTION] click_shadow fallback via JS: "
+                f"host={host_selector}, selector={target_selector}"
+            )
+
+    def _type_text_shadow(
+        self,
+        host_selector: str,
+        target_selector: str,
+        text: str,
+        clear_first: bool = True,
+        timeout: Optional[int] = None,
+    ) -> None:
+        element = self._wait_shadow_element(
+            host_selector,
+            target_selector,
+            timeout=timeout,
+            require_clickable=False,
+        )
+        actions = ActionChains(self.driver)
+        actions.move_to_element(element).click().perform()
+        if clear_first:
+            try:
+                element.send_keys(Keys.CONTROL, "a")
+                element.send_keys(Keys.BACKSPACE)
+                element.send_keys(Keys.DELETE)
+            except Exception:
+                pass
+            try:
+                element.clear()
+            except Exception:
+                pass
+        element.send_keys(text)
+
+        actual = (element.get_attribute("value") or "")
+        expected = "" if text is None else str(text)
+        if actual != expected:
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const val = arguments[1];
+                el.focus();
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                """,
+                element,
+                expected,
+            )
+            corrected = (element.get_attribute("value") or "")
+            print(
+                f"[ACTION] type_shadow value corrected: host={host_selector}, selector={target_selector}, "
                 f"before='{actual}', after='{corrected}'"
             )

@@ -14,10 +14,10 @@
   "browser": "edge",
   "base_url": "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html",
   "startup_navigate": true,
-  "keep_browser_open": true,
+  "keep_browser_open": false,
   "edge": {
     "stealth_mode": true,
-    "user_data_dir": "%LOCALAPPDATA%/Microsoft/Edge/User Data",
+    "user_data_dir": "C:/fcn/MyEdgeDataHapag",
     "attach_existing": false,
     "debugger_address": "127.0.0.1:9222"
   },
@@ -30,6 +30,19 @@
   },
   "default_timeout": 15,
   "download_dir": "output/hapag/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Event",
+        "DateTime"
+      ],
+      "text_contains": [
+        "container for given container number not found",
+        "no result",
+        "not found"
+      ]
+    }
+  },
   "log": {
     "retention_days": 30
   },
@@ -141,6 +154,12 @@
       "scrape": {
         "list_by": "css",
         "list_selector": "#event-table-container-id table.EventTable_table-container__Qioyi tr.EventTable_table-row__yVKnA",
+        "allow_empty": true,
+        "no_data_selectors": [
+          "span.error[id='tracing_by_container_f:hl11']",
+          "#tracing_by_container_f\\:hl11.error",
+          "td span.error[releasemessageurl*='track-by-container-solution']"
+        ],
         "fields": [
           {
             "name": " Place",
