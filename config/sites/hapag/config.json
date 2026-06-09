@@ -37,8 +37,9 @@
     "cmd": "request.get",
     "session_id": "hapag-session",
     "session_ttl_minutes": 15,
+    "destroy_session_after_bootstrap": true,
     "warmup_urls": [
-      "https://www.hapag-lloyd.com/en/home.html"
+      "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html"
     ],
     "url": "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html",
     "max_timeout": 60000,
@@ -123,37 +124,30 @@
         },
         {
           "action": "click_if_exists",
-          "by": "css",
-          "selector": "#accept-recommended-btn-handler",
-          "timeout": 6,
-          "comment": "若出现Cookie弹窗，点击Select All"
-        },
-        {
-          "action": "click_if_exists",
           "by": "xpath",
-          "selector": "//span[normalize-space()='Verify you are human']/ancestor::label | //div[@id='content']//label[contains(@class,'cb-lb')] | //div[@id='content']//input[@type='checkbox']",
+          "selector": "//div[contains(@class,'ot-pc-footer') and contains(@class,'ot-pc-scrollbar')]//button[@id='accept-recommended-btn-handler']",
           "timeout": 8,
-          "comment": "Cloudflare 人机校验出现时勾选复选框，未出现则跳过"
-        },
-        {
-          "action": "sleep",
-          "seconds": 2,
-          "comment": "勾选后短暂等待验证状态更新"
+          "max_rounds": 2,
+          "post_click_invisible_by": "css",
+          "post_click_invisible_selector": "div.ot-pc-footer.ot-pc-scrollbar",
+          "post_click_invisible_timeout": 4,
+          "comment": "第2步：若出现OneTrust遮罩，先命中外围footer并点击内部Select All，点击后要求遮罩隐藏"
         },
         {
           "action": "type",
-          "by": "xpath",
-          "selector": "//input[@id='tracing_by_container_f:hl12']",
+          "by": "css",
+          "selector": "input.hal-input[placeholder='Container-/ Booking- or B/L-Number'][type='text']",
           "value": "{{ContainerNo}}",
           "timeout": 20,
           "clear_first": true,
-          "comment": "输入ContainerNo"
+          "comment": "第3步：在Home页输入查询号"
         },
         {
           "action": "click",
           "by": "xpath",
-          "selector": "//button[@id='tracing_by_container_f:hl25']",
-          "timeout": 15
+          "selector": "//button[@type='button' and contains(concat(' ', normalize-space(@class), ' '), ' hal-button ') and normalize-space()='Track']",
+          "timeout": 15,
+          "comment": "第4步：点击Home页 Track 按钮触发查询"
         }
       ],
       "scrape": {

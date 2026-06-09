@@ -278,39 +278,52 @@ class WorkflowCrawler:
         cmd = str(cfg.get("cmd", "request.get")).strip() or "request.get"
         max_timeout = max(1000, int(cfg.get("max_timeout", 60000) or 60000))
         request_timeout = max(1, int(cfg.get("request_timeout", 75) or 75))
+        session_ttl = int(cfg.get("session_ttl_minutes", 0) or 0)
+        session_name = str(cfg.get("session_id", "")).strip()
+        session_enabled = bool(session_name) or session_ttl > 0
+        if session_enabled and not session_name:
+            session_name = f"crawler-{int(time.time())}"
 
         payload: Dict[str, Any] = {
             "cmd": cmd,
             "url": target_url,
             "maxTimeout": max_timeout,
         }
-        session_ttl = int(cfg.get("session_ttl_minutes", 0) or 0)
+
+        if session_enabled:
+            if not self._create_flaresolverr_session(endpoint, session_name, request_timeout):
+                print("[FS] Session create failed, skip FlareSolverr bootstrap.")
+                return
+            payload["session"] = session_name
         if session_ttl > 0:
-            payload["session"] = str(cfg.get("session_id", "hapag"))
             payload["session_ttl_minutes"] = session_ttl
 
         cookies: List[Dict[str, Any]] = []
         html = ""
         solved_url = ""
-        for idx, url in enumerate(solve_urls, start=1):
-            one_payload = dict(payload)
-            one_payload["url"] = url
-            print(f"[FS] Solving challenge via FlareSolverr ({idx}/{len(solve_urls)}): {url}")
-            try:
-                resp = requests.post(endpoint, json=one_payload, timeout=request_timeout)
-                result = resp.json() if resp.content else {}
-            except Exception as e:
-                print(f"[FS] Request failed on {url}: {type(e).__name__}: {e}")
-                return
+        try:
+            for idx, url in enumerate(solve_urls, start=1):
+                one_payload = dict(payload)
+                one_payload["url"] = url
+                print(f"[FS] Solving challenge via FlareSolverr ({idx}/{len(solve_urls)}): {url}")
+                try:
+                    resp = requests.post(endpoint, json=one_payload, timeout=request_timeout)
+                    result = resp.json() if resp.content else {}
+                except Exception as e:
+                    print(f"[FS] Request failed on {url}: {type(e).__name__}: {e}")
+                    return
 
-            if result.get("status") != "ok":
-                print(f"[FS] Solve failed on {url}: {result.get('message', 'unknown error')}")
-                return
+                if result.get("status") != "ok":
+                    print(f"[FS] Solve failed on {url}: {result.get('message', 'unknown error')}")
+                    return
 
-            solution = result.get("solution", {}) if isinstance(result.get("solution", {}), dict) else {}
-            cookies = solution.get("cookies", []) if isinstance(solution.get("cookies", []), list) else []
-            html = str(solution.get("response", "") or "")
-            solved_url = url
+                solution = result.get("solution", {}) if isinstance(result.get("solution", {}), dict) else {}
+                cookies = solution.get("cookies", []) if isinstance(solution.get("cookies", []), list) else []
+                html = str(solution.get("response", "") or "")
+                solved_url = url
+        finally:
+            if session_enabled and bool(cfg.get("destroy_session_after_bootstrap", True)):
+                self._destroy_flaresolverr_session(endpoint, session_name, request_timeout)
 
         if not cookies:
             print("[FS] Solve returned no cookies, skip cookie bootstrap.")
@@ -336,6 +349,49 @@ class WorkflowCrawler:
                     print(f"[FS] Navigated back to target URL after cookie apply: {target_url}")
                 except Exception as e:
                     print(f"[FS] Failed to navigate to target URL after cookie apply: {type(e).__name__}: {e}")
+
+    def _create_flaresolverr_session(self, endpoint: str, session_name: str, request_timeout: int) -> bool:
+        payload = {
+            "cmd": "sessions.create",
+            "session": session_name,
+        }
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=request_timeout)
+            result = resp.json() if resp.content else {}
+        except Exception as e:
+            print(f"[FS] Session create request failed: {type(e).__name__}: {e}")
+            return False
+
+        if result.get("status") == "ok":
+            print(f"[FS] Session created: {session_name}")
+            return True
+
+        message = str(result.get("message", "") or "")
+        if "already exists" in message.lower():
+            print(f"[FS] Session already exists, reusing: {session_name}")
+            return True
+
+        print(f"[FS] Session create failed: {message or 'unknown error'}")
+        return False
+
+    def _destroy_flaresolverr_session(self, endpoint: str, session_name: str, request_timeout: int) -> None:
+        payload = {
+            "cmd": "sessions.destroy",
+            "session": session_name,
+        }
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=request_timeout)
+            result = resp.json() if resp.content else {}
+            if result.get("status") == "ok":
+                print(f"[FS] Session destroyed: {session_name}")
+                return
+            message = str(result.get("message", "") or "")
+            if "does not exist" in message.lower():
+                print(f"[FS] Session already gone: {session_name}")
+                return
+            print(f"[FS] Session destroy failed: {message or 'unknown error'}")
+        except Exception as e:
+            print(f"[FS] Session destroy request failed: {type(e).__name__}: {e}")
 
     def _apply_external_cookies(self, target_url: str, cookies: List[Dict[str, Any]]) -> bool:
         if not self.driver:
@@ -627,11 +683,14 @@ class WorkflowCrawler:
             print("[BROWSER] Attached existing browser, skip about:blank bootstrap.")
             self._override_navigator_webdriver()
             return
+        bootstrap_open_base_url = bool(self.config.get("bootstrap_open_base_url", True))
+        bootstrap_url = str(self.config.get("base_url", "")).strip() if bootstrap_open_base_url else ""
+        target_url = bootstrap_url or "about:blank"
         try:
-            # Use blank page as bootstrap context so we can inject before target-site navigation.
-            self.driver.get("about:blank")
+            # Default behavior opens base_url directly so the first visible page is the target site.
+            self.driver.get(target_url)
         except Exception as e:
-            print(f"[BROWSER] about:blank bootstrap skipped: {type(e).__name__}: {e}")
+            print(f"[BROWSER] Bootstrap navigation skipped: target={target_url}, {type(e).__name__}: {e}")
         self._override_navigator_webdriver()
 
     def _resolve_external_stealth_js_path(self) -> Optional[Path]:
@@ -899,6 +958,7 @@ class WorkflowCrawler:
     def _navigate_to_base_url(self) -> None:
         """Navigate to base URL with retry for transient Firefox/geckodriver session loss."""
         url = self.config["base_url"]
+        target_prefix = str(url).split("#", 1)[0]
         retry_count = int(self.config.get("startup_nav_retry", 1))
         max_attempts = max(1, retry_count + 1)
         page_load_timeout = int(self.config.get("page_load_timeout", 60))
@@ -908,6 +968,13 @@ class WorkflowCrawler:
             try:
                 if not self.driver:
                     self._start_browser()
+
+                current_url = self._safe_current_url()
+                if current_url != "(unavailable)" and current_url.startswith(target_prefix):
+                    self._override_navigator_webdriver()
+                    print(f"[STEP 2] Base URL already open, skip duplicate navigation. URL={current_url}")
+                    return
+
                 self.driver.set_page_load_timeout(page_load_timeout)
                 self.driver.get(url)
                 self._override_navigator_webdriver()
@@ -928,7 +995,6 @@ class WorkflowCrawler:
                     f"URL={current_url}, readyState={ready_state}"
                 )
 
-                target_prefix = url.split("#", 1)[0]
                 if current_url != "(unavailable)" and current_url.startswith(target_prefix):
                     print("[STEP 2] Target URL is already reached despite timeout, continue.")
                     return

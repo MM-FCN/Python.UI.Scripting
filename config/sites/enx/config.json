@@ -90,6 +90,12 @@
         "list_selector": ".sea_slider .box",
         "fields": [
           {
+            "name": "PORT_LABEL",
+            "by": "css",
+            "selector": ".info_label",
+            "attr": "text"
+          },
+          {
             "name": "PORT",
             "by": "css",
             "selector": ".box_detail .city",
@@ -127,9 +133,8 @@
       },
       "output": {
         "format": "json",
-        "json_structure": "globals_plus_records",
         "global_identifier_keys": [
-          "ContainerNo"
+          "HAWNO"
         ],
         "path": "output/enx/enx_tracking.json"
       }

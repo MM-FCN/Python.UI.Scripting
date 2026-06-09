@@ -1,6 +1,13 @@
 {
   "browser": "edge",
   "base_url": "https://www.msc.com",
+  "edge": {
+    "stealth_mode": true,
+    "accept_language": "en-US,en;q=0.9",
+    "user_data_dir": "",
+    "attach_existing": false,
+    "debugger_address": ""
+  },
   "default_timeout": 15,
   "download_dir": "output/msc/downloads",
   "fallback": {

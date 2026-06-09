@@ -302,6 +302,53 @@ def _persist_deferred_output_items(
         return False
 
 
+def _persist_output_records_from_history(
+    *,
+    config_path: str,
+    headless: bool,
+    params: dict[str, str],
+    base_url_override: Optional[str],
+    records: list[dict[str, Any]],
+) -> bool:
+    if not records:
+        return True
+
+    try:
+        config = load_config(config_path)
+        if base_url_override:
+            config["base_url"] = base_url_override
+
+        crawler = create_workflow_crawler(config=config, headless=headless, params=params)
+        tasks = config.get("tasks", [])
+
+        output_cfgs: list[dict[str, Any]] = []
+        if isinstance(tasks, list):
+            for task in tasks:
+                if not isinstance(task, dict):
+                    continue
+                one_output = task.get("output", {})
+                if isinstance(one_output, dict) and one_output:
+                    output_cfgs.append(dict(one_output))
+
+        if not output_cfgs:
+            root_output = config.get("output", {})
+            if isinstance(root_output, dict) and root_output:
+                output_cfgs.append(dict(root_output))
+
+        if not output_cfgs:
+            return True
+
+        for one_output_cfg in output_cfgs:
+            crawler.config["output"] = one_output_cfg
+            crawler.popup_data = []
+            crawler._save_records(records)
+        return True
+    except Exception as e:
+        print(f"[OUTPUT] Failed to persist historical records for {config_path}: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return False
+
+
 def _push_records_to_uri(
     *,
     uri: str,
@@ -492,16 +539,81 @@ def _ensure_state_db(db_path: Path) -> None:
             """
             CREATE TABLE IF NOT EXISTS crawl_item_state (
                 site_name TEXT NOT NULL,
+                request_uri TEXT NOT NULL DEFAULT '',
                 item_field TEXT NOT NULL,
                 item_value TEXT NOT NULL,
                 status TEXT NOT NULL,
                 record_count INTEGER NOT NULL DEFAULT 0,
                 source_file TEXT,
                 updated_at TEXT NOT NULL,
-                PRIMARY KEY (site_name, item_field, item_value)
+                PRIMARY KEY (site_name, request_uri, item_field, item_value)
             )
             """
         )
+
+        # Migrate legacy schema (PK without request_uri) so same item can be tracked per URI.
+        table_info = conn.execute("PRAGMA table_info(crawl_item_state)").fetchall()
+        column_names = [str(row[1]) for row in table_info if len(row) > 1]
+        pk_columns = [
+            str(row[1])
+            for row in sorted(table_info, key=lambda r: int(r[5]) if len(r) > 5 else 0)
+            if len(row) > 5 and int(row[5]) > 0
+        ]
+        expected_pk = ["site_name", "request_uri", "item_field", "item_value"]
+        if ("request_uri" not in column_names) or (pk_columns != expected_pk):
+            conn.execute("ALTER TABLE crawl_item_state RENAME TO crawl_item_state_legacy")
+            conn.execute(
+                """
+                CREATE TABLE crawl_item_state (
+                    site_name TEXT NOT NULL,
+                    request_uri TEXT NOT NULL DEFAULT '',
+                    item_field TEXT NOT NULL,
+                    item_value TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    record_count INTEGER NOT NULL DEFAULT 0,
+                    source_file TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (site_name, request_uri, item_field, item_value)
+                )
+                """
+            )
+            if "request_uri" in column_names:
+                conn.execute(
+                    """
+                    INSERT INTO crawl_item_state(
+                        site_name, request_uri, item_field, item_value, status, record_count, source_file, updated_at
+                    )
+                    SELECT
+                        site_name,
+                        COALESCE(request_uri, ''),
+                        item_field,
+                        item_value,
+                        status,
+                        COALESCE(record_count, 0),
+                        source_file,
+                        updated_at
+                    FROM crawl_item_state_legacy
+                    """
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO crawl_item_state(
+                        site_name, request_uri, item_field, item_value, status, record_count, source_file, updated_at
+                    )
+                    SELECT
+                        site_name,
+                        '',
+                        item_field,
+                        item_value,
+                        status,
+                        COALESCE(record_count, 0),
+                        source_file,
+                        updated_at
+                    FROM crawl_item_state_legacy
+                    """
+                )
+            conn.execute("DROP TABLE crawl_item_state_legacy")
         conn.commit()
     finally:
         conn.close()
@@ -522,6 +634,7 @@ def _load_successful_items(
     db_path: Path,
     *,
     site_name: str,
+    request_uri: str,
     item_field: str,
     item_values: list[str],
 ) -> set[str]:
@@ -539,10 +652,10 @@ def _load_successful_items(
         placeholders = ",".join("?" for _ in normalized_values)
         sql = (
             "SELECT item_value FROM crawl_item_state "
-            "WHERE site_name=? AND item_field=? AND status='success' "
+            "WHERE site_name=? AND request_uri=? AND item_field=? AND status='success' "
             f"AND item_value IN ({placeholders})"
         )
-        rows = conn.execute(sql, [site_name, item_field, *normalized_values]).fetchall()
+        rows = conn.execute(sql, [site_name, request_uri, item_field, *normalized_values]).fetchall()
         return {
             _normalize_item_value(item_field, row[0])
             for row in rows
@@ -556,6 +669,7 @@ def _upsert_item_results(
     db_path: Path,
     *,
     site_name: str,
+    request_uri: str,
     item_field: str,
     results: list[dict[str, Any]],
     source_file: str,
@@ -567,7 +681,7 @@ def _upsert_item_results(
 
     conn = sqlite3.connect(str(db_path))
     try:
-        rows_to_upsert: list[tuple[str, str, str, str, int, str, str]] = []
+        rows_to_upsert: list[tuple[str, str, str, str, str, int, str, str]] = []
         for item in results:
             normalized_value = _normalize_item_value(item_field, item.get("item_value", ""))
             if not normalized_value:
@@ -575,6 +689,7 @@ def _upsert_item_results(
             rows_to_upsert.append(
                 (
                     site_name,
+                    request_uri,
                     item_field,
                     normalized_value,
                     str(item.get("status", "error")).strip() or "error",
@@ -587,9 +702,9 @@ def _upsert_item_results(
         conn.executemany(
             """
             INSERT INTO crawl_item_state(
-                site_name, item_field, item_value, status, record_count, source_file, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(site_name, item_field, item_value)
+                site_name, request_uri, item_field, item_value, status, record_count, source_file, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(site_name, request_uri, item_field, item_value)
             DO UPDATE SET
                 status=excluded.status,
                 record_count=excluded.record_count,
@@ -601,6 +716,141 @@ def _upsert_item_results(
         conn.commit()
     finally:
         conn.close()
+
+
+def _collect_site_output_json_candidates(project_root: Path, site_name: str) -> list[Path]:
+    cfg_path = project_root / "config" / "sites" / site_name / "config.json"
+    if not cfg_path.exists():
+        return []
+
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    candidate_output_paths: list[str] = []
+    output_cfg = cfg.get("output", {}) if isinstance(cfg.get("output", {}), dict) else {}
+    output_path = str(output_cfg.get("path", "")).strip()
+    if output_path:
+        candidate_output_paths.append(output_path)
+
+    tasks = cfg.get("tasks", [])
+    if isinstance(tasks, list):
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            task_output = task.get("output", {}) if isinstance(task.get("output", {}), dict) else {}
+            task_output_path = str(task_output.get("path", "")).strip()
+            if task_output_path:
+                candidate_output_paths.append(task_output_path)
+
+    files: list[Path] = []
+    seen: set[str] = set()
+    for raw in candidate_output_paths:
+        p = Path(raw)
+        if not p.is_absolute():
+            p = (project_root / p).resolve()
+        suffix = p.suffix.lower()
+        if suffix != ".json":
+            continue
+
+        parent = p.parent
+        stem = p.stem
+        if not parent.exists():
+            continue
+
+        patterns = [f"{stem}.json", f"{stem}_*.json"]
+        for pattern in patterns:
+            for one in parent.glob(pattern):
+                key = str(one.resolve())
+                if key in seen:
+                    continue
+                seen.add(key)
+                files.append(one)
+
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    return files
+
+
+def _load_historical_records_map(
+    project_root: Path,
+    *,
+    site_name: str,
+    item_field: str,
+    item_values: list[str],
+    max_files: int = 200,
+) -> dict[str, list[dict[str, Any]]]:
+    normalized_targets = {
+        _normalize_item_value(item_field, v)
+        for v in item_values
+        if _normalize_item_value(item_field, v)
+    }
+    if not normalized_targets:
+        return {}
+
+    candidates = _collect_site_output_json_candidates(project_root, site_name)
+    if max_files > 0:
+        candidates = candidates[:max_files]
+
+    matched: dict[str, list[dict[str, Any]]] = {}
+    pending = set(normalized_targets)
+
+    def _extract_rows_with_context(payload_obj: Any) -> list[dict[str, Any]]:
+        if isinstance(payload_obj, list):
+            return [dict(r) for r in payload_obj if isinstance(r, dict)]
+
+        if not isinstance(payload_obj, dict):
+            return []
+
+        raw_rows = payload_obj.get("records", [])
+        if not isinstance(raw_rows, list):
+            raw_rows = [payload_obj]
+
+        top_level_context: dict[str, Any] = {
+            "ContainerNo": payload_obj.get("ContainerNo", ""),
+            "MAWB": payload_obj.get("MAWB", ""),
+            "HAWNO": payload_obj.get("HAWNO", ""),
+        }
+        value_for_field = payload_obj.get(item_field, "")
+        if value_for_field:
+            top_level_context[item_field] = value_for_field
+
+        rows_with_context: list[dict[str, Any]] = []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            merged = dict(row)
+            for key, value in top_level_context.items():
+                if value and key not in merged:
+                    merged[key] = value
+            rows_with_context.append(merged)
+        return rows_with_context
+
+    for file_path in candidates:
+        if not pending:
+            break
+        try:
+            payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        rows = _extract_rows_with_context(payload)
+        if not rows:
+            continue
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            value = _normalize_item_value(item_field, row.get(item_field, ""))
+            if not value or value not in pending:
+                continue
+            grouped.setdefault(value, []).append(dict(row))
+
+        for value, rows in grouped.items():
+            if value in pending and rows:
+                matched[value] = rows
+                pending.remove(value)
+
+    return matched
 
 
 def _split_into_chunks(items: list[dict[str, str]], worker_count: int, chunk_size: int) -> list[list[dict[str, str]]]:
@@ -811,6 +1061,8 @@ def _run_input_timer_mode(
     parallel_max_workers = max(1, int(parallel_cfg.get("max_workers", 4)))
     parallel_chunk_size = int(parallel_cfg.get("chunk_size", 0))
     skip_successful_items = bool(parallel_cfg.get("skip_successful_items", True))
+    force_output_on_skipped_success = bool(parallel_cfg.get("force_output_on_skipped_success", True))
+    recrawl_skipped_without_history = bool(parallel_cfg.get("recrawl_skipped_without_history", True))
     state_db_raw = str(parallel_cfg.get("state_db_path", "state/crawl_item_state.db")).strip()
     if not state_db_raw:
         state_db_raw = "state/crawl_item_state.db"
@@ -822,7 +1074,10 @@ def _run_input_timer_mode(
         print(
             f"[WATCH] Parallel batch mode enabled: max_workers={parallel_max_workers}, "
             f"chunk_size={'auto' if parallel_chunk_size <= 0 else parallel_chunk_size}, "
-            f"skip_successful_items={skip_successful_items}, state_db={state_db_path}"
+            f"skip_successful_items={skip_successful_items}, "
+            f"force_output_on_skipped_success={force_output_on_skipped_success}, "
+            f"recrawl_skipped_without_history={recrawl_skipped_without_history}, "
+            f"state_db={state_db_path}"
         )
 
     done_root = project_root / "input_done"
@@ -985,6 +1240,7 @@ def _run_input_timer_mode(
                     continue
 
                 extracted_params, callback_uri, base_url_override, batch = _extract_params_uri_and_batch(payload)
+                state_request_uri = (callback_uri or "").strip()
                 runtime_params = dict(base_runtime_params)
                 runtime_params.update(extracted_params)
 
@@ -1033,6 +1289,7 @@ def _run_input_timer_mode(
 
                 skipped_success_values: set[str] = set()
                 attempted_values: list[str] = []
+                skipped_jobs_for_push: list[dict[str, Any]] = []
                 if state_track_field and skip_successful_items:
                     if batch and batch_field:
                         raw_values = [
@@ -1053,6 +1310,7 @@ def _run_input_timer_mode(
                     skipped_success_values = _load_successful_items(
                         state_db_path,
                         site_name=normalized_site_name,
+                        request_uri=state_request_uri,
                         item_field=state_track_field,
                         item_values=raw_values,
                     )
@@ -1069,6 +1327,73 @@ def _run_input_timer_mode(
                             ) not in skipped_success_values
                         ]
 
+                if state_track_field and skipped_success_values and (
+                    callback_uri or force_output_on_skipped_success
+                ):
+                    historical_map = _load_historical_records_map(
+                        project_root,
+                        site_name=normalized_site_name,
+                        item_field=state_track_field,
+                        item_values=sorted(skipped_success_values),
+                    )
+                    requeued_missing_count = 0
+
+                    for item_value in sorted(skipped_success_values):
+                        one_params = dict(runtime_params)
+                        one_params[state_track_field] = item_value
+                        historical_rows = historical_map.get(item_value, [])
+                        if historical_rows:
+                            skipped_jobs_for_push.append({
+                                "params": one_params,
+                                "records": historical_rows,
+                            })
+                            continue
+
+                        if recrawl_skipped_without_history:
+                            exists_in_queue = any(
+                                _normalize_item_value(state_track_field, p.get(state_track_field, "")) == item_value
+                                for p in job_params_list
+                                if isinstance(p, dict)
+                            )
+                            if not exists_in_queue:
+                                job_params_list.append(one_params)
+                            requeued_missing_count += 1
+                            continue
+
+                        skipped_jobs_for_push.append({
+                            "params": one_params,
+                            "records": [{
+                                state_track_field: item_value,
+                                "source_site": normalized_site_name,
+                                "status": "cached_success_skipped",
+                            }],
+                        })
+
+                    historical_hit_count = sum(
+                        1 for v in skipped_success_values if historical_map.get(v)
+                    )
+                    if historical_hit_count:
+                        print(
+                            f"[WATCH] Reusing historical records for callback push: "
+                            f"field={state_track_field}, hits={historical_hit_count}/{len(skipped_success_values)}"
+                        )
+                    elif not recrawl_skipped_without_history:
+                        print(
+                            f"[WATCH] No historical records found for skipped items; "
+                            "fallback to cached_success_skipped payload"
+                        )
+                    else:
+                        print(
+                            f"[WATCH] Missing historical records were re-queued for fresh crawl: "
+                            f"field={state_track_field}, count={requeued_missing_count}"
+                        )
+
+                    if recrawl_skipped_without_history and requeued_missing_count > 0:
+                        print(
+                            f"[WATCH] Re-queued skipped items without history for fresh crawl: "
+                            f"field={state_track_field}, count={requeued_missing_count}"
+                        )
+
                 if state_track_field:
                     attempted_values = [
                         _normalize_item_value(state_track_field, p.get(state_track_field, ""))
@@ -1081,46 +1406,51 @@ def _run_input_timer_mode(
                         f"[WATCH] All batch items already successful, skip crawling. "
                         f"field={state_track_field}, file={file_path.name}"
                     )
-                    push_ok = True
-                    if callback_uri and skipped_success_values:
-                        skipped_jobs: list[dict[str, Any]] = []
-                        for item_value in sorted(skipped_success_values):
-                            one_params = dict(runtime_params)
-                            one_params[state_track_field] = item_value
-                            skipped_jobs.append({
-                                "params": one_params,
-                                "records": [{
-                                    state_track_field: item_value,
-                                    "source_site": normalized_site_name,
-                                    "status": "cached_success_skipped",
-                                }],
-                            })
-
+                    all_skipped_ok = True
+                    if callback_uri and skipped_jobs_for_push:
                         print(
                             f"[WATCH] Callback push for skipped-success items: "
-                            f"field={state_track_field}, jobs={len(skipped_jobs)}"
+                            f"field={state_track_field}, jobs={len(skipped_jobs_for_push)}"
                         )
-                        push_ok = _push_records_to_uri(
+                        all_skipped_ok = _push_records_to_uri(
                             uri=callback_uri,
                             site_name=site_name,
                             input_file_name=file_path.name,
                             params=runtime_params,
                             records=[],
-                            job_results=skipped_jobs,
+                            job_results=skipped_jobs_for_push,
                             timeout_seconds=push_timeout_seconds,
                             retries=push_retries,
                             verify_ssl=push_verify_ssl,
                         )
 
-                    if file_path.exists():
-                        if not push_ok:
-                            print(
-                                "[WATCH] Callback push failed for skipped-success items; "
-                                "archive input to avoid retry loop."
+                    if all_skipped_ok and force_output_on_skipped_success and skipped_jobs_for_push:
+                        print(
+                            f"[WATCH] Persisting output for skipped-success items: "
+                            f"field={state_track_field}, jobs={len(skipped_jobs_for_push)}"
+                        )
+                        for one_job in skipped_jobs_for_push:
+                            one_params = one_job.get("params", {})
+                            one_records = one_job.get("records", [])
+                            ok_save = _persist_output_records_from_history(
+                                config_path=str(cfg_path),
+                                headless=headless,
+                                params=one_params if isinstance(one_params, dict) else {},
+                                base_url_override=base_url_override,
+                                records=one_records if isinstance(one_records, list) else [],
                             )
-                        archived = archive_input_file(file_path, site_name)
-                        seen_fingerprints[key] = fingerprint
-                        print(f"[WATCH] Archived processed input: {archived}")
+                            if not ok_save:
+                                all_skipped_ok = False
+                                break
+
+                    if file_path.exists():
+                        if all_skipped_ok:
+                            archived = archive_input_file(file_path, site_name)
+                            seen_fingerprints[key] = fingerprint
+                            print(f"[WATCH] Archived processed input: {archived}")
+                        else:
+                            renamed = rename_failed_input_for_retry(file_path)
+                            print(f"[WATCH] Renamed failed input for retry: {renamed.name}")
                     continue
 
                 success = True
@@ -1137,13 +1467,21 @@ def _run_input_timer_mode(
                     and has_container_input
                 )
                 if use_fallback_chain:
-                    container_values: list[str] = []
-                    if batch and str(batch[0]) == "ContainerNo":
-                        container_values = [str(v).strip() for v in batch_values if str(v).strip()]
-                    else:
-                        raw_container = str(runtime_params.get("ContainerNo", "")).strip()
-                        if raw_container:
-                            container_values = [raw_container]
+                    fallback_job_params_list: list[dict[str, str]] = []
+                    for one_params in job_params_list:
+                        if not isinstance(one_params, dict):
+                            continue
+                        container_value = _normalize_item_value(
+                            "ContainerNo",
+                            one_params.get("ContainerNo", ""),
+                        )
+                        if not container_value:
+                            continue
+                        fallback_one_params = dict(one_params)
+                        fallback_one_params["ContainerNo"] = container_value
+                        fallback_job_params_list.append(fallback_one_params)
+
+                    container_values = [p["ContainerNo"] for p in fallback_job_params_list]
 
                     if not container_values:
                         print("[FALLBACK] No ContainerNo found in input, fallback chain skipped")
@@ -1162,11 +1500,7 @@ def _run_input_timer_mode(
                         if can_reuse_trigger_site:
                             trigger_site = fallback_trigger_site
                             trigger_cfg_path = project_root / "config" / "sites" / trigger_site / "config.json"
-                            trigger_params_list: list[dict[str, str]] = []
-                            for one_container in container_values:
-                                one_params = dict(runtime_params)
-                                one_params["ContainerNo"] = one_container
-                                trigger_params_list.append(one_params)
+                            trigger_params_list = [dict(p) for p in fallback_job_params_list]
 
                             print(
                                 f"[FALLBACK] Reusing one '{trigger_site}' browser session for "
@@ -1286,7 +1620,7 @@ def _run_input_timer_mode(
                             if run_parallel:
                                 worker_count = min(parallel_max_workers, len(container_values))
                                 chunk_lists = _split_into_chunks(
-                                    [{"ContainerNo": v} for v in container_values],
+                                    fallback_job_params_list,
                                     worker_count=worker_count,
                                     chunk_size=parallel_chunk_size,
                                 )
@@ -1297,7 +1631,10 @@ def _run_input_timer_mode(
                                 def _run_fallback_chunk(chunk: list[dict[str, str]]) -> list[dict[str, Any]]:
                                     chunk_results: list[dict[str, Any]] = []
                                     for one in chunk:
-                                        one_container = str(one.get("ContainerNo", "")).strip()
+                                        one_container = _normalize_item_value(
+                                            "ContainerNo",
+                                            one.get("ContainerNo", ""),
+                                        )
                                         if not one_container:
                                             continue
                                         ok_one, one_params, one_records, one_deferred_items = _run_container_fallback_chain(
@@ -1351,7 +1688,8 @@ def _run_input_timer_mode(
                                                 "deferred_output_items": one_deferred_items,
                                             })
                             else:
-                                for idx, container_no in enumerate(container_values, start=1):
+                                for idx, one_job_params in enumerate(fallback_job_params_list, start=1):
+                                    container_no = one_job_params["ContainerNo"]
                                     print(
                                         f"[FALLBACK] Container job {idx}/{len(container_values)}: {container_no}"
                                     )
@@ -1498,10 +1836,14 @@ def _run_input_timer_mode(
                         processed_jobs.append({"params": dict(job_params), "records": records})
 
                 if success and callback_uri:
-                    if len(push_jobs) > 1:
+                    aggregated_push_jobs = list(push_jobs)
+                    if skipped_jobs_for_push:
+                        aggregated_push_jobs.extend(skipped_jobs_for_push)
+
+                    if len(aggregated_push_jobs) > 1:
                         print(
                             f"[WATCH] Aggregated callback push for file={file_path.name}, "
-                            f"jobs={len(push_jobs)}"
+                            f"jobs={len(aggregated_push_jobs)}"
                         )
                     ok = _push_records_to_uri(
                         uri=callback_uri,
@@ -1509,7 +1851,7 @@ def _run_input_timer_mode(
                         input_file_name=file_path.name,
                         params=runtime_params,
                         records=[],
-                        job_results=push_jobs,
+                        job_results=aggregated_push_jobs,
                         timeout_seconds=push_timeout_seconds,
                         retries=push_retries,
                         verify_ssl=push_verify_ssl,
@@ -1568,6 +1910,7 @@ def _run_input_timer_mode(
                         _upsert_item_results(
                             state_db_path,
                             site_name=normalized_site_name,
+                            request_uri=state_request_uri,
                             item_field=state_track_field,
                             results=state_rows,
                             source_file=file_path.name,

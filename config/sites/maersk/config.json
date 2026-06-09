@@ -1,6 +1,13 @@
 {
   "browser": "edge",
   "base_url": "https://www.maersk.com/tracking/",
+  "edge": {
+    "stealth_mode": true,
+    "accept_language": "en-US,en;q=0.9",
+    "user_data_dir": "",
+    "attach_existing": false,
+    "debugger_address": ""
+  },
   "default_timeout": 15,
   "download_dir": "output/maersk/downloads",
   "fallback": {
@@ -74,14 +81,14 @@
         {
           "action": "click_shadow",
           "host_selector": "mc-button[data-test='track-button']",
-          "selector": "button[aria-label='跟踪']",
+          "selector": "button[aria-label='Track'], button[aria-label='跟踪']",
           "timeout": 15,
-          "comment": "点击跟踪按钮发起查询"
+          "comment": "点击跟踪按钮发起查询（兼容英文Track与中文跟踪）"
         }
       ],
       "scrape": {
         "list_by": "css",
-        "list_selector": "#event-table-container-id table.EventTable_table-container__Qioyi tr.EventTable_table-row__yVKnA",
+        "list_selector": "div[data-test='transport-plan'] ul[data-test='transport-plan-list'] > li.transport-plan__list__item",
         "allow_empty": true,
         "no_data_selectors": [
           "[data-testid='tnt-no-data-found-title']",
@@ -91,28 +98,34 @@
         ],
         "fields": [
           {
-            "name": " Place",
+            "name": "Status",
+            "by": "xpath",
+            "selector": ".",
+            "attr": "data-test"
+          },
+          {
+            "name": "Place",
             "by": "css",
-            "selector": "td:nth-child(1) .EventTable_country-name__fax8l",
+            "selector": "div.location[data-test='location-name']",
             "attr": "text"
           },
           {
             "name": "Event",
             "by": "css",
-            "selector": "td:nth-child(2) .EventTable_event-name-vessel-group__sDbkT > div:first-child",
-            "attr": "text"
-          },
-          {
-            "name": "EventDetail",
-            "by": "css",
-            "selector": "td:nth-child(2) .EventTable_event-name-vessel-group__sDbkT > div:nth-child(2)",
+            "selector": "div.milestone[data-test='milestone'] > span:first-child",
             "attr": "text"
           },
           {
             "name": "DateTime",
             "by": "css",
-            "selector": "td:nth-child(2) .EventDate_event-date-container__dLSip",
+            "selector": "div.milestone[data-test='milestone'] span[data-test='milestone-date']",
             "attr": "text"
+          },
+          {
+            "name": "Icon",
+            "by": "css",
+            "selector": "mc-icon[data-test='icon']",
+            "attr": "icon"
           }
         ],
         "max_pages": 5,
