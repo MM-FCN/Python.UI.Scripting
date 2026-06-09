@@ -1,8 +1,10 @@
 import argparse
+import errno
 import json
 import math
 import platform
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -939,7 +941,12 @@ def _run_input_timer_mode(
         site_done_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = site_done_dir / f"{src.stem}_{ts}{src.suffix}"
-        src.replace(dst)
+        try:
+            src.replace(dst)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            shutil.move(str(src), str(dst))
         cleanup_old_logs(site_done_dir, keep_days=effective_input_done_retention_days)
         return dst
 
