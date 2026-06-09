@@ -507,6 +507,8 @@ class WorkflowCrawler:
     def _start_browser(self) -> None:
         browser = str(self.config.get("browser", "firefox")).strip().lower()
         self._browser_name = browser
+        selenium_remote_url = str(self.config.get("selenium_remote_url", "")).strip()
+        remote_mode = bool(selenium_remote_url)
         page_load_strategy = str(self.config.get("page_load_strategy", "eager")).strip().lower()
         if page_load_strategy not in {"normal", "eager", "none"}:
             page_load_strategy = "eager"
@@ -558,13 +560,15 @@ class WorkflowCrawler:
                 if edge_accept_language:
                     options.add_argument(f"--lang={edge_accept_language.split(',')[0].strip()}")
 
-                if edge_binary_location:
+                if edge_binary_location and not remote_mode:
                     expanded_edge_binary = os.path.expanduser(os.path.expandvars(edge_binary_location))
                     if Path(expanded_edge_binary).exists():
                         options.binary_location = expanded_edge_binary
                         print(f"[BROWSER] Edge binary override: {expanded_edge_binary}")
                     else:
                         print(f"[BROWSER] Edge binary override not found, ignored: {expanded_edge_binary}")
+                elif edge_binary_location and remote_mode:
+                    print("[BROWSER] Edge binary_location ignored in remote Selenium mode.")
 
                 # Keep direct-launch behavior closer to a regular user browser profile.
                 # In attach mode, some experimental options are rejected by msedgedriver.
@@ -577,34 +581,38 @@ class WorkflowCrawler:
                     options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
                     options.add_experimental_option("useAutomationExtension", False)
 
-                if edge_user_data_dir and not attach_existing:
+                if edge_user_data_dir and not attach_existing and not remote_mode:
                     try:
                         Path(edge_user_data_dir).mkdir(parents=True, exist_ok=True)
                     except Exception:
                         pass
                     options.add_argument(f"--user-data-dir={edge_user_data_dir}")
                     print(f"[BROWSER] Edge direct mode using user data dir: {edge_user_data_dir}")
-                elif not attach_existing:
+                elif not attach_existing and not remote_mode:
                     # Use an isolated temporary profile so automation does not attach to an existing Edge process.
                     runtime_profile = tempfile.mkdtemp(prefix="edge-crawler-", dir=str(Path(tempfile.gettempdir())))
                     self._runtime_edge_profile_dir = runtime_profile
                     options.add_argument(f"--user-data-dir={runtime_profile}")
                     print(f"[BROWSER] Edge direct mode using isolated runtime profile: {runtime_profile}")
+                elif remote_mode and edge_user_data_dir:
+                    print("[BROWSER] Edge user_data_dir ignored in remote Selenium mode.")
 
                 for arg in edge_extra_args:
                     arg_str = str(arg).strip()
                     if arg_str:
                         options.add_argument(arg_str)
 
-                options.add_experimental_option("prefs", {
-                    "download.default_directory": self._download_dir,
+                edge_prefs = {
                     "download.prompt_for_download": False,
                     "download.directory_upgrade": True,
                     "safebrowsing.enabled": True,
                     "credentials_enable_service": False,
                     "profile.password_manager_enabled": False,
                     "intl.accept_languages": edge_accept_language,
-                })
+                }
+                if not remote_mode:
+                    edge_prefs["download.default_directory"] = self._download_dir
+                options.add_experimental_option("prefs", edge_prefs)
                 if attach_existing:
                     if not debugger_address:
                         raise ValueError(
@@ -612,11 +620,18 @@ class WorkflowCrawler:
                         )
                     options.add_experimental_option("debuggerAddress", debugger_address)
                     print(f"[BROWSER] Edge attach mode enabled: debuggerAddress={debugger_address}")
-                self._attached_existing_browser = attach_existing
-                print("[BROWSER] Resolving msedgedriver...")
-                edge_exe = self._resolve_edgedriver_path()
-                service = EdgeService(edge_exe)
-                self.driver = webdriver.Edge(service=service, options=options)
+                if selenium_remote_url:
+                    if attach_existing:
+                        raise ValueError("Edge attach mode is not supported when selenium_remote_url is enabled")
+                    self._attached_existing_browser = False
+                    print(f"[BROWSER] Selenium remote mode enabled: {selenium_remote_url}")
+                    self.driver = webdriver.Remote(command_executor=selenium_remote_url, options=options)
+                else:
+                    self._attached_existing_browser = attach_existing
+                    print("[BROWSER] Resolving msedgedriver...")
+                    edge_exe = self._resolve_edgedriver_path()
+                    service = EdgeService(edge_exe)
+                    self.driver = webdriver.Edge(service=service, options=options)
 
                 if self.headless and edge_stealth_mode and edge_headless_stealth and not attach_existing:
                     self._apply_edge_headless_overrides(edge_cfg)
@@ -634,7 +649,8 @@ class WorkflowCrawler:
                 options.add_argument("--disable-infobars")
 
                 options.set_preference("browser.download.folderList", 2)
-                options.set_preference("browser.download.dir", self._download_dir)
+                if not remote_mode:
+                    options.set_preference("browser.download.dir", self._download_dir)
                 options.set_preference("browser.download.useDownloadDir", True)
                 options.set_preference("browser.download.manager.showWhenStarting", False)
                 options.set_preference(
@@ -643,11 +659,14 @@ class WorkflowCrawler:
                 )
                 options.set_preference("pdfjs.disabled", True)
                 options.set_preference("dom.webdriver.enabled", False)
-
-                print("[BROWSER] Resolving geckodriver...")
-                gecko_exe = self._resolve_geckodriver_path()
-                service = Service(gecko_exe)
-                self.driver = webdriver.Firefox(service=service, options=options)
+                if selenium_remote_url:
+                    print(f"[BROWSER] Selenium remote mode enabled: {selenium_remote_url}")
+                    self.driver = webdriver.Remote(command_executor=selenium_remote_url, options=options)
+                else:
+                    print("[BROWSER] Resolving geckodriver...")
+                    gecko_exe = self._resolve_geckodriver_path()
+                    service = Service(gecko_exe)
+                    self.driver = webdriver.Firefox(service=service, options=options)
 
             self._bootstrap_stealth_js()
             if not self.headless:
@@ -2645,10 +2664,11 @@ class WorkflowCrawler:
         for i, step in enumerate(steps, start=1):
             next_step = steps[i] if i < len(steps) else None
             runtime_step = dict(step)
-            # 动态替换所有 {{param}} 变量
-            if "value" in runtime_step and isinstance(runtime_step["value"], str):
-                for k, v in self.params.items():
-                    runtime_step["value"] = runtime_step["value"].replace(f"{{{{{k}}}}}", v)
+            # 动态替换常用字符串字段中的 {{param}} 变量
+            for key in ("value", "text", "url"):
+                if key in runtime_step and isinstance(runtime_step[key], str):
+                    for k, v in self.params.items():
+                        runtime_step[key] = runtime_step[key].replace(f"{{{{{k}}}}}", v)
             action = runtime_step.get("action")
             by = runtime_step.get("by", "")
             selector = runtime_step.get("selector", "")

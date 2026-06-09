@@ -1,7 +1,10 @@
 import argparse
+import errno
 import json
 import math
+import platform
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -73,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         "--watch-sites",
         help="Comma-separated site folders to process in timer mode, e.g. cargo,cargonavi",
     )
+    parser.add_argument(
+        "--selenium-remote-url",
+        action="store_true",
+        help="Enable remote Selenium mode; URL is resolved from global config with platform fallback",
+    )
     return parser.parse_args()
 
 
@@ -108,18 +116,34 @@ def _load_global_config(project_root: Path) -> dict[str, Any]:
     return payload
 
 
+def _resolve_selenium_remote_url(global_cfg: dict[str, Any]) -> str:
+    raw = ""
+    if isinstance(global_cfg, dict):
+        raw = str(global_cfg.get("selenium_remote_url", "")).strip()
+    if raw:
+        return raw
+
+    system_name = platform.system().strip().lower()
+    if system_name == "windows":
+        return "http://szh2vm0372.apac.bosch.com:4444/wd/hub"
+    return "http://172.17.0.1:4444/wd/hub"
+
+
 def run_config(
     config_path: str,
     headless: bool,
     params: Optional[dict[str, str]] = None,
     base_url_override: Optional[str] = None,
     defer_output_save: bool = False,
+    selenium_remote_url: Optional[str] = None,
 ) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config: {config_path}")
     print(f"{'='*60}")
     try:
         config = load_config(config_path)
+        if selenium_remote_url:
+            config["selenium_remote_url"] = selenium_remote_url
         if base_url_override:
             config["base_url"] = base_url_override
             print(f"[TASK] Override base_url by input URI: {base_url_override}")
@@ -148,6 +172,7 @@ def run_config_batch_reuse_session(
     params_list: list[dict[str, str]],
     base_url_override: Optional[str] = None,
     defer_output_save: bool = False,
+    selenium_remote_url: Optional[str] = None,
 ) -> tuple[bool, list[dict[str, Any]]]:
     print(f"\n{'='*60}")
     print(f"[TASK] Config (batch reuse): {config_path}")
@@ -155,6 +180,8 @@ def run_config_batch_reuse_session(
     print(f"{'='*60}")
     try:
         config = load_config(config_path)
+        if selenium_remote_url:
+            config["selenium_remote_url"] = selenium_remote_url
         if base_url_override:
             config["base_url"] = base_url_override
             print(f"[TASK] Override base_url by input URI: {base_url_override}")
@@ -273,12 +300,15 @@ def _persist_deferred_output_items(
     params: dict[str, str],
     base_url_override: Optional[str],
     deferred_items: list[dict[str, Any]],
+    selenium_remote_url: Optional[str] = None,
 ) -> bool:
     if not deferred_items:
         return True
 
     try:
         config = load_config(config_path)
+        if selenium_remote_url:
+            config["selenium_remote_url"] = selenium_remote_url
         if base_url_override:
             config["base_url"] = base_url_override
 
@@ -928,6 +958,7 @@ def _run_container_fallback_chain(
     prepare_browser_startup,
     site_error_retries: int = 2,
     defer_output_save: bool = False,
+    selenium_remote_url: Optional[str] = None,
 ) -> tuple[bool, dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     params = dict(base_runtime_params)
     params["ContainerNo"] = container_no
@@ -963,6 +994,7 @@ def _run_container_fallback_chain(
                 params=params,
                 base_url_override=base_url_override,
                 defer_output_save=defer_output_save,
+                selenium_remote_url=selenium_remote_url,
             )
             if ok:
                 selected_deferred_items = deferred_items
@@ -1026,6 +1058,7 @@ def _run_input_timer_mode(
     cargo_fallback_cfg: Optional[dict[str, Any]] = None,
     parallel_cfg: Optional[dict[str, Any]] = None,
     input_done_retention_days: int = 30,
+    selenium_remote_url: Optional[str] = None,
 ) -> None:
     interval = max(1, int(interval_seconds))
     seen_fingerprints: dict[str, tuple[int, int]] = {}
@@ -1163,7 +1196,12 @@ def _run_input_timer_mode(
         site_done_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = site_done_dir / f"{src.stem}_{ts}{src.suffix}"
-        src.replace(dst)
+        try:
+            src.replace(dst)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            shutil.move(str(src), str(dst))
         cleanup_old_logs(site_done_dir, keep_days=effective_input_done_retention_days)
         return dst
 
@@ -1597,6 +1635,7 @@ def _run_input_timer_mode(
                                         prepare_browser_startup=prepare_browser_startup,
                                         site_error_retries=site_error_retries,
                                         defer_output_save=bool(callback_uri),
+                                        selenium_remote_url=selenium_remote_url,
                                     )
                                     processed_jobs.append({"params": dict(fb_params), "records": fb_records})
                                     if not ok_one:
@@ -1647,6 +1686,7 @@ def _run_input_timer_mode(
                                             prepare_browser_startup=prepare_browser_startup,
                                             site_error_retries=site_error_retries,
                                             defer_output_save=bool(callback_uri),
+                                            selenium_remote_url=selenium_remote_url,
                                         )
                                         chunk_results.append({
                                             "ok": ok_one,
@@ -1703,6 +1743,7 @@ def _run_input_timer_mode(
                                         prepare_browser_startup=prepare_browser_startup,
                                         site_error_retries=site_error_retries,
                                         defer_output_save=bool(callback_uri),
+                                        selenium_remote_url=selenium_remote_url,
                                     )
                                     processed_jobs.append({"params": dict(one_params), "records": one_records})
                                     if not ok:
@@ -1744,6 +1785,7 @@ def _run_input_timer_mode(
                                     chunk,
                                     base_url_override,
                                     bool(callback_uri),
+                                    selenium_remote_url,
                                 )
                                 for chunk in chunks
                             ]
@@ -1786,6 +1828,7 @@ def _run_input_timer_mode(
                             params_list=job_params_list,
                             base_url_override=base_url_override,
                             defer_output_save=bool(callback_uri),
+                            selenium_remote_url=selenium_remote_url,
                         )
                         if not ok:
                             success = False
@@ -1820,6 +1863,7 @@ def _run_input_timer_mode(
                             params=job_params,
                             base_url_override=base_url_override,
                             defer_output_save=bool(callback_uri),
+                            selenium_remote_url=selenium_remote_url,
                         )
                         if not ok:
                             success = False
@@ -1875,6 +1919,7 @@ def _run_input_timer_mode(
                                 params=one_params if isinstance(one_params, dict) else {},
                                 base_url_override=base_url_override,
                                 deferred_items=one_deferred_items if isinstance(one_deferred_items, list) else [],
+                                selenium_remote_url=selenium_remote_url,
                             )
                             if not ok_save:
                                 success = False
@@ -1960,6 +2005,9 @@ def main() -> None:
     site_root = (project_root / "config" / "sites").resolve()
     global_cfg = _load_global_config(project_root)
     watch_cfg = global_cfg.get("watch", {}) if isinstance(global_cfg.get("watch"), dict) else {}
+    resolved_selenium_remote_url: Optional[str] = None
+    if args.selenium_remote_url:
+        resolved_selenium_remote_url = _resolve_selenium_remote_url(global_cfg)
 
     log_cfg_path: Optional[Path] = None
     if args.config:
@@ -1993,6 +2041,8 @@ def main() -> None:
         print(f"[LOG] Site scope: {log_site_name}")
         if runtime_params:
             print(f"[PARAMS] Runtime params: {sorted(runtime_params.keys())}")
+        if resolved_selenium_remote_url:
+            print(f"[BROWSER] Selenium remote mode enabled: {resolved_selenium_remote_url}")
 
         watch_enabled_by_default = bool(watch_cfg.get("enabled_by_default", True))
         should_watch_input = args.watch_input or (
@@ -2032,6 +2082,7 @@ def main() -> None:
                 cargo_fallback_cfg=watch_cfg.get("cargo_fallback", {}),
                 parallel_cfg=watch_cfg.get("parallel", {}),
                 input_done_retention_days=input_done_retention_days,
+                selenium_remote_url=resolved_selenium_remote_url,
             )
             return
 
@@ -2042,7 +2093,12 @@ def main() -> None:
                 return
             print(f"[INFO] Found {len(site_configs)} site(s): {[p.parent.name for p in site_configs]}")
             for cfg_path in site_configs:
-                run_config(str(cfg_path), args.headless, runtime_params)
+                run_config(
+                    str(cfg_path),
+                    args.headless,
+                    runtime_params,
+                    selenium_remote_url=resolved_selenium_remote_url,
+                )
         elif args.config:
             cfg_path = Path(args.config)
             if not cfg_path.exists():
@@ -2056,13 +2112,23 @@ def main() -> None:
             if relative.name != "config.json":
                 print("[ERROR] --config only supports files named config.json under config/sites/<site>/")
                 return
-            run_config(str(cfg_path), args.headless, runtime_params)
+            run_config(
+                str(cfg_path),
+                args.headless,
+                runtime_params,
+                selenium_remote_url=resolved_selenium_remote_url,
+            )
         elif args.site:
             cfg_path = Path("config/sites") / args.site / "config.json"
             if not cfg_path.exists():
                 print(f"[ERROR] Site config not found: {cfg_path}")
                 return
-            run_config(str(cfg_path), args.headless, runtime_params)
+            run_config(
+                str(cfg_path),
+                args.headless,
+                runtime_params,
+                selenium_remote_url=resolved_selenium_remote_url,
+            )
         else:
             print("[ERROR] Please provide --site <name>, --all-sites, --config ..., or use --watch-input")
     finally:
