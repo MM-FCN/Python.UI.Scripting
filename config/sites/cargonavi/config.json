@@ -3,6 +3,20 @@
   "base_url": "https://cargonavi.com/",
   "default_timeout": 15,
   "download_dir": "output/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Status",
+        "StatusDate"
+      ],
+      "text_contains": [
+        "no data",
+        "no result",
+        "not found",
+        "no record"
+      ]
+    }
+  },
   "log": {
     "retention_days": 30
   },
@@ -100,6 +114,7 @@
         }
       ],
       "scrape": {
+        "allow_empty": true,
         "popup_table": {
           "table_selector": "tr[id^='trackShiptable1rowInner'] table.grdTable",
           "row_by": "css",

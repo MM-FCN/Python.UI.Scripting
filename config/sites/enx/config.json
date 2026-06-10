@@ -3,6 +3,23 @@
   "base_url": "https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml",
   "default_timeout": 15,
   "download_dir": "output/enx/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "PORT",
+        "ACTUAL",
+        "PLANNED"
+      ],
+      "text_contains": [
+        "no data",
+        "no result",
+        "not found",
+        "no record",
+        "please check the data you have entered",
+        "does not exist in the system"
+      ]
+    }
+  },
   "log": {
     "retention_days": 30
   },
@@ -88,6 +105,12 @@
       "scrape": {
         "list_by": "css",
         "list_selector": ".sea_slider .box",
+        "allow_empty": true,
+        "no_data_selectors": [
+          ".tracking_err",
+          ".tracking_err .error_txt",
+          "#enxSptrctrc010\\:output_message"
+        ],
         "fields": [
           {
             "name": "PORT_LABEL",

@@ -2178,7 +2178,12 @@ class WorkflowCrawler:
         for sel in no_data_selectors:
             try:
                 elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                if any(el.is_displayed() for el in elements):
+                for el in elements:
+                    if not el.is_displayed():
+                        continue
+                    element_text = (el.text or "").strip()
+                    if not element_text:
+                        continue
                     print(f"[FALLBACK] no_data matched by selector: {sel}")
                     return True
             except Exception:
@@ -3491,8 +3496,15 @@ class WorkflowCrawler:
                     for sel in no_data_selectors:
                         try:
                             elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                            if any(el.is_displayed() for el in elements):
+                            for el in elements:
+                                if not el.is_displayed():
+                                    continue
+                                element_text = (el.text or "").strip()
+                                if not element_text:
+                                    continue
                                 matched_selector = sel
+                                break
+                            if matched_selector:
                                 break
                         except Exception:
                             continue
