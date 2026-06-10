@@ -28,7 +28,8 @@
       "db_config.skip_successful_items": "是否跳过历史成功单号，避免重复爬取。",
       "db_config.force_output_on_skipped_success": "当单号因历史成功被跳过时，是否仍基于历史数据生成新的 output 文件。",
       "db_config.recrawl_skipped_without_history": "当单号被判定历史成功但找不到历史 output 时，是否自动回爬该单号以保证推送真实数据。",
-      "db_config.state_db_path": "单号状态库路径（SQLite），记录每个单号的爬取结果。"
+      "db_config.state_db_path": "单号状态库路径（SQLite），记录每个单号的爬取结果。",
+      "db_config.max_size_mb": "单号状态库文件大小上限（MB）；超过上限时会在处理单个 input 文件开始前清空并重建数据库。"
     },
     "enabled_by_default": true,
     "interval_seconds": 10,
@@ -66,7 +67,8 @@
       "skip_successful_items": true,
       "force_output_on_skipped_success": true,
       "recrawl_skipped_without_history": true,
-      "state_db_path": "state/crawl_item_state.db"
+      "state_db_path": "state/crawl_item_state.db",
+      "max_size_mb": 200
     }
   }
 }

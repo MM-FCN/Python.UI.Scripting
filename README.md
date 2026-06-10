@@ -64,7 +64,8 @@ SITE_PASSWORD=你的密码
 			"skip_successful_items": true,
 			"force_output_on_skipped_success": true,
 			"recrawl_skipped_without_history": true,
-			"state_db_path": "state/crawl_item_state.db"
+			"state_db_path": "state/crawl_item_state.db",
+			"max_size_mb": 200
 		}
 	}
 }
@@ -92,6 +93,7 @@ SITE_PASSWORD=你的密码
 - `watch.db_config.force_output_on_skipped_success`：当单号因历史成功被跳过时，是否仍基于历史数据生成新的 output 文件。
 - `watch.db_config.recrawl_skipped_without_history`：当单号被判定历史成功但找不到历史 output 时，是否自动回爬该单号。
 - `watch.db_config.state_db_path`：单号状态库路径（SQLite）。
+- `watch.db_config.max_size_mb`：单号状态库文件大小上限（MB）。超过上限时，会在处理单个 input 文件开始前清空并重建状态库。
 - input JSON 支持批量字段：`ContainerNo` / `MAWB` 可传字符串或数组；传数组时会逐条执行抓取并逐条推送。
 
 说明：

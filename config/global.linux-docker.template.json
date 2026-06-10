@@ -26,7 +26,8 @@
       "skip_successful_items": true,
       "force_output_on_skipped_success": true,
       "recrawl_skipped_without_history": true,
-      "state_db_path": "state/crawl_item_state.db"
+      "state_db_path": "state/crawl_item_state.db",
+      "max_size_mb": 200
     }
   }
 }

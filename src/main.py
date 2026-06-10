@@ -28,6 +28,9 @@ from src.logging_utils import (
 from src.workflow import create_workflow_crawler
 
 
+DEFAULT_MAX_STATE_DB_BYTES = 200 * 1024 * 1024
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Workflow-based website crawler")
 
@@ -157,6 +160,21 @@ def _read_runtime_log_settings(global_cfg: dict[str, Any]) -> dict[str, int]:
         "max_bytes": max_mb * 1024 * 1024,
         "retention_days": retention_days,
         "cleanup_interval_seconds": cleanup_interval_seconds,
+    }
+
+
+def _read_watch_db_size_settings(global_cfg: dict[str, Any]) -> dict[str, int]:
+    watch_cfg = global_cfg.get("watch", {}) if isinstance(global_cfg.get("watch"), dict) else {}
+    db_cfg = watch_cfg.get("db_config", {}) if isinstance(watch_cfg.get("db_config"), dict) else {}
+    default_max_mb = DEFAULT_MAX_STATE_DB_BYTES // (1024 * 1024)
+    max_size_mb = _coerce_positive_int(
+        db_cfg.get("max_size_mb", default_max_mb),
+        default_max_mb,
+        "db_config.max_size_mb",
+    )
+    return {
+        "max_size_mb": max_size_mb,
+        "max_size_bytes": max_size_mb * 1024 * 1024,
     }
 
 
@@ -704,6 +722,34 @@ def _ensure_state_db(db_path: Path) -> None:
         conn.close()
 
 
+def _reset_state_db_if_oversized(db_path: Path, *, max_size_bytes: int) -> bool:
+    if max_size_bytes < 1:
+        return False
+
+    try:
+        current_size_bytes = db_path.stat().st_size
+    except FileNotFoundError:
+        return False
+    except Exception as e:
+        print(f"[WATCH] Failed to stat state DB {db_path}: {e}")
+        return False
+
+    if current_size_bytes <= max_size_bytes:
+        return False
+
+    try:
+        db_path.unlink()
+        print(
+            f"[WATCH] State DB exceeded size limit and was reset: path={db_path}, "
+            f"size_mb={current_size_bytes / (1024 * 1024):.2f}, "
+            f"limit_mb={max_size_bytes / (1024 * 1024):.2f}"
+        )
+        return True
+    except Exception as e:
+        print(f"[WATCH] Failed to reset oversized state DB {db_path}: {e}")
+        return False
+
+
 def _normalize_item_value(item_field: str, value: Any) -> str:
     normalized = str(value).strip()
     if not normalized:
@@ -1150,6 +1196,7 @@ def _run_input_timer_mode(
     parallel_chunk_size = int(parallel_cfg.get("chunk_size", 0))
     db_cfg_raw = global_cfg.get("watch", {}).get("db_config", {}) if isinstance(global_cfg.get("watch", {}), dict) else {}
     db_cfg = db_cfg_raw if isinstance(db_cfg_raw, dict) else {}
+    db_size_settings = _read_watch_db_size_settings(global_cfg)
     skip_successful_items = bool(db_cfg.get("skip_successful_items", parallel_cfg.get("skip_successful_items", True)))
     force_output_on_skipped_success = bool(
         db_cfg.get("force_output_on_skipped_success", parallel_cfg.get("force_output_on_skipped_success", True))
@@ -1163,6 +1210,7 @@ def _run_input_timer_mode(
     state_db_path = Path(state_db_raw)
     if not state_db_path.is_absolute():
         state_db_path = (project_root / state_db_path).resolve()
+    state_db_max_size_bytes = db_size_settings["max_size_bytes"]
 
     if parallel_enabled:
         print(
@@ -1317,6 +1365,8 @@ def _run_input_timer_mode(
                 fingerprint = (int(stat.st_mtime_ns), int(stat.st_size))
                 if seen_fingerprints.get(key) == fingerprint:
                     continue
+
+                _reset_state_db_if_oversized(state_db_path, max_size_bytes=state_db_max_size_bytes)
 
                 cfg_path = project_root / "config" / "sites" / site_name / "config.json"
 
