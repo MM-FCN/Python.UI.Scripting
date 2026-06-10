@@ -18,7 +18,13 @@ import requests
 from dotenv import load_dotenv
 
 from src.config_loader import ConfigError, load_config
-from src.logging_utils import cleanup_old_logs, setup_file_logging
+from src.logging_utils import (
+    DEFAULT_LOG_CLEANUP_INTERVAL_SECONDS,
+    DEFAULT_LOG_RETENTION_DAYS,
+    DEFAULT_MAX_LOG_BYTES,
+    cleanup_old_logs,
+    setup_file_logging,
+)
 from src.workflow import create_workflow_crawler
 
 
@@ -114,6 +120,44 @@ def _load_global_config(project_root: Path) -> dict[str, Any]:
         return {}
 
     return payload
+
+
+def _coerce_positive_int(raw: Any, default_value: int, label: str) -> int:
+    try:
+        value = int(raw)
+    except Exception:
+        print(f"[LOG] Invalid {label}={raw!r}, fallback to {default_value}")
+        return default_value
+
+    if value < 1:
+        print(f"[LOG] Invalid {label}={raw!r}, fallback to {default_value}")
+        return default_value
+    return value
+
+
+def _read_runtime_log_settings(global_cfg: dict[str, Any]) -> dict[str, int]:
+    watch_cfg = global_cfg.get("watch", {}) if isinstance(global_cfg.get("watch"), dict) else {}
+    watch_log_cfg = watch_cfg.get("log", {}) if isinstance(watch_cfg.get("log"), dict) else {}
+    legacy_log_cfg = global_cfg.get("log", {}) if isinstance(global_cfg.get("log"), dict) else {}
+    log_cfg = watch_log_cfg or legacy_log_cfg
+    default_max_mb = DEFAULT_MAX_LOG_BYTES // (1024 * 1024)
+    max_mb = _coerce_positive_int(log_cfg.get("max_mb", default_max_mb), default_max_mb, "log.max_mb")
+    retention_days = _coerce_positive_int(
+        log_cfg.get("retention_days", DEFAULT_LOG_RETENTION_DAYS),
+        DEFAULT_LOG_RETENTION_DAYS,
+        "log.retention_days",
+    )
+    cleanup_interval_seconds = _coerce_positive_int(
+        log_cfg.get("cleanup_interval_seconds", DEFAULT_LOG_CLEANUP_INTERVAL_SECONDS),
+        DEFAULT_LOG_CLEANUP_INTERVAL_SECONDS,
+        "log.cleanup_interval_seconds",
+    )
+    return {
+        "max_mb": max_mb,
+        "max_bytes": max_mb * 1024 * 1024,
+        "retention_days": retention_days,
+        "cleanup_interval_seconds": cleanup_interval_seconds,
+    }
 
 
 def _resolve_selenium_remote_url(global_cfg: dict[str, Any]) -> str:
@@ -494,23 +538,6 @@ def _push_records_to_uri(
             time.sleep(1)
 
     return False
-
-
-def _read_log_retention_days(config_path: Optional[Path], default_days: int = 30) -> int:
-    if not config_path or not config_path.exists():
-        return default_days
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        raw = data.get("log", {}).get("retention_days", default_days)
-        days = int(raw)
-        if days < 1:
-            print(f"[LOG] Invalid retention_days={raw}, fallback to {default_days}")
-            return default_days
-        return days
-    except Exception as e:
-        print(f"[LOG] Failed to read log.retention_days from {config_path}: {e}")
-        return default_days
 
 
 def _resolve_log_site_name(args: argparse.Namespace) -> str:
@@ -2059,23 +2086,15 @@ def main() -> None:
     if args.selenium_remote_url:
         resolved_selenium_remote_url = _resolve_selenium_remote_url(global_cfg)
 
-    log_cfg_path: Optional[Path] = None
-    if args.config:
-        log_cfg_path = Path(args.config)
-    elif args.site:
-        log_cfg_path = Path("config/sites") / args.site / "config.json"
-    elif args.all_sites:
-        first_site_cfg = sorted(Path("config/sites").glob("*/config.json"))
-        if first_site_cfg:
-            log_cfg_path = first_site_cfg[0]
-
-    retention_days = _read_log_retention_days(log_cfg_path, default_days=30)
+    runtime_log_settings = _read_runtime_log_settings(global_cfg)
     log_site_name = _resolve_log_site_name(args)
 
     log_manager = setup_file_logging(
         project_root=project_root,
-        keep_days=retention_days,
+        keep_days=runtime_log_settings["retention_days"],
         site_name=log_site_name,
+        max_log_bytes=runtime_log_settings["max_bytes"],
+        cleanup_interval_seconds=runtime_log_settings["cleanup_interval_seconds"],
     )
     runtime_params: dict[str, str] = {}
     if args.mawb:
@@ -2087,7 +2106,10 @@ def main() -> None:
 
     try:
         print(f"[LOG] Writing runtime logs to: {log_manager.log_path}")
-        print(f"[LOG] Retention days: {retention_days}")
+        print(f"[LOG] Mode: bounded ring buffer")
+        print(f"[LOG] Retention days: {runtime_log_settings['retention_days']}")
+        print(f"[LOG] Max file size: {runtime_log_settings['max_mb']} MB")
+        print(f"[LOG] Cleanup interval seconds: {runtime_log_settings['cleanup_interval_seconds']}")
         print(f"[LOG] Site scope: {log_site_name}")
         if runtime_params:
             print(f"[PARAMS] Runtime params: {sorted(runtime_params.keys())}")

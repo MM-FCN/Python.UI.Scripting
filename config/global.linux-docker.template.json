@@ -12,6 +12,11 @@
       "cargonavi",
       "enx"
     ],
+    "log": {
+      "max_mb": 80,
+      "retention_days": 7,
+      "cleanup_interval_seconds": 3600
+    },
     "parallel": {
       "enabled": true,
       "max_workers": 6,

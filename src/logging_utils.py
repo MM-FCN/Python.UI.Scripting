@@ -3,13 +3,17 @@ from __future__ import annotations
 import io
 import re
 import sys
+import threading
+import time
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
 
-DEFAULT_MAX_LOG_BYTES = 50 * 1024 * 1024
-DEFAULT_LOG_RETENTION_DAYS = 30
+DEFAULT_MAX_LOG_BYTES = 80 * 1024 * 1024
+DEFAULT_LOG_RETENTION_DAYS = 7
+DEFAULT_LOG_CLEANUP_INTERVAL_SECONDS = 60 * 60
 
 
 class TeeStream(io.TextIOBase):
@@ -29,16 +33,40 @@ class TeeStream(io.TextIOBase):
         self._log_file.flush()
 
 
-class RotatingDailyLogFile(io.TextIOBase):
-    """Append to a daily log file and rotate when it exceeds max bytes."""
+class BoundedDailyLogFile(io.TextIOBase):
+    """Keep a single daily log file within a fixed size window."""
 
-    def __init__(self, base_path: Path, max_bytes: int, encoding: str = "utf-8") -> None:
-        self.base_path = base_path
-        self.max_bytes = max_bytes
+    def __init__(
+        self,
+        site_dir: Path,
+        max_bytes: int,
+        keep_days: int,
+        cleanup_interval_seconds: int,
+        encoding: str = "utf-8",
+        now_provider: Callable[[], datetime] | None = None,
+        monotonic_provider: Callable[[], float] | None = None,
+    ) -> None:
+        self.site_dir = site_dir
+        self.max_bytes = max(int(max_bytes), 1)
+        self.keep_days = max(int(keep_days), 1)
+        self.cleanup_interval_seconds = max(int(cleanup_interval_seconds), 1)
         self._encoding = encoding
-        self.base_path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.base_path.open("a", encoding=self._encoding)
-        self._current_size = self._read_current_size()
+        self._now_provider = now_provider or datetime.now
+        self._monotonic_provider = monotonic_provider or time.monotonic
+        self._lock = threading.RLock()
+        self._file: TextIO | None = None
+        self._current_path: Path | None = None
+        self._current_size = 0
+        self._next_cleanup_at = 0.0
+        self.site_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_current_file(self._now_provider())
+        self._run_cleanup()
+
+    @property
+    def log_path(self) -> Path:
+        if self._current_path is None:
+            raise RuntimeError("Log file path is not initialized")
+        return self._current_path
 
     def write(self, s: str) -> int:
         if not s:
@@ -46,77 +74,142 @@ class RotatingDailyLogFile(io.TextIOBase):
 
         incoming_size = len(s.encode(self._encoding, errors="replace"))
 
-        if self._should_rotate_for(incoming_size):
-            self._rotate()
-
-        self._file.write(s)
-        self._current_size += incoming_size
+        with self._lock:
+            now = self._now_provider()
+            self._ensure_current_file(now)
+            self._maybe_run_cleanup()
+            self._write_text(s, incoming_size)
         return len(s)
 
     def flush(self) -> None:
-        self._file.flush()
+        with self._lock:
+            if self._file is not None:
+                self._file.flush()
 
     def close(self) -> None:
+        with self._lock:
+            self._close_file()
+
+    def _write_text(self, s: str, incoming_size: int) -> None:
+        if self._file is None:
+            self._ensure_current_file(self._now_provider())
+        if self._file is None:
+            return
+
+        if incoming_size >= self.max_bytes:
+            self._rewrite_with_text(s)
+            return
+
+        if (self._current_size + incoming_size) <= self.max_bytes:
+            self._file.write(s)
+            self._current_size += incoming_size
+            return
+
+        retained_existing = self._read_tail_bytes(max(self.max_bytes - incoming_size, 0))
+        retained_incoming = s.encode(self._encoding, errors="replace")
+        retained = self._normalize_retained_bytes(retained_existing + retained_incoming)
+        self._rewrite_with_bytes(retained)
+
+    def _normalize_retained_bytes(self, data: bytes) -> bytes:
+        trimmed = data[-self.max_bytes :]
+        text = trimmed.decode(self._encoding, errors="ignore")
+        if len(data) > self.max_bytes:
+            newline_idx = text.find("\n")
+            if 0 <= newline_idx < (len(text) - 1):
+                text = text[newline_idx + 1 :]
+        encoded = text.encode(self._encoding)
+        if len(encoded) <= self.max_bytes:
+            return encoded
+        return encoded[-self.max_bytes :].decode(self._encoding, errors="ignore").encode(self._encoding)
+
+    def _read_tail_bytes(self, limit: int) -> bytes:
+        path = self.log_path
+        if limit <= 0 or not path.exists():
+            return b""
+        self.flush()
+        file_size = self._current_size
+        with path.open("rb") as f:
+            if file_size > limit:
+                f.seek(file_size - limit)
+            return f.read(limit)
+
+    def _rewrite_with_text(self, s: str) -> None:
+        retained = self._normalize_retained_bytes(s.encode(self._encoding, errors="replace"))
+        self._rewrite_with_bytes(retained)
+
+    def _rewrite_with_bytes(self, data: bytes) -> None:
+        path = self.log_path
+        self._close_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self._file = path.open("a", encoding=self._encoding)
+        self._current_size = len(data)
+
+    def _ensure_current_file(self, now: datetime) -> None:
+        next_path = self._build_log_path(now)
+        if self._current_path == next_path and self._file is not None:
+            return
+        self._close_file()
+        next_path.parent.mkdir(parents=True, exist_ok=True)
+        self._current_path = next_path
+        self._shrink_existing_file_if_needed(next_path)
+        self._file = next_path.open("a", encoding=self._encoding)
+        self._current_size = self._read_current_size(next_path)
+
+    def _build_log_path(self, now: datetime) -> Path:
+        month_dir = self.site_dir / now.strftime("%Y-%m")
+        return month_dir / f"run_{now.strftime('%Y-%m-%d')}.txt"
+
+    def _shrink_existing_file_if_needed(self, path: Path) -> None:
+        current_size = self._read_current_size(path)
+        if current_size <= self.max_bytes:
+            return
+        retained = self._normalize_retained_bytes(path.read_bytes())
+        path.write_bytes(retained)
+
+    def _read_current_size(self, path: Path) -> int:
         try:
-            self._file.flush()
-            self._file.close()
-        except Exception:
-            pass
-
-    def _should_rotate_for(self, incoming_size: int) -> bool:
-        return self._current_size > 0 and (self._current_size + incoming_size) > self.max_bytes
-
-    def _rotate(self) -> None:
-        try:
-            self._file.flush()
-            self._file.close()
-        except Exception:
-            pass
-
-        highest = self._find_highest_suffix()
-        for idx in range(highest, 0, -1):
-            src = self._suffix_path(idx)
-            dst = self._suffix_path(idx + 1)
-            if src.exists():
-                src.replace(dst)
-
-        if self.base_path.exists():
-            self.base_path.replace(self._suffix_path(1))
-
-        self._file = self.base_path.open("a", encoding=self._encoding)
-        self._current_size = 0
-
-    def _read_current_size(self) -> int:
-        try:
-            return self.base_path.stat().st_size if self.base_path.exists() else 0
+            return path.stat().st_size if path.exists() else 0
         except Exception:
             return 0
 
-    def _find_highest_suffix(self) -> int:
-        highest = 0
-        pattern = re.compile(rf"^{re.escape(self.base_path.name)}\.(\d+)$")
-        for child in self.base_path.parent.iterdir():
-            if not child.is_file():
-                continue
-            match = pattern.match(child.name)
-            if not match:
-                continue
-            try:
-                highest = max(highest, int(match.group(1)))
-            except ValueError:
-                continue
-        return highest
+    def _close_file(self) -> None:
+        if self._file is None:
+            return
+        try:
+            self._file.flush()
+            self._file.close()
+        except Exception:
+            pass
+        finally:
+            self._file = None
 
-    def _suffix_path(self, idx: int) -> Path:
-        return self.base_path.with_name(f"{self.base_path.name}.{idx}")
+    def _maybe_run_cleanup(self) -> None:
+        now = self._monotonic_provider()
+        if now < self._next_cleanup_at:
+            return
+        self._run_cleanup()
+
+    def _run_cleanup(self) -> None:
+        try:
+            cleanup_old_logs(
+                log_root=self.site_dir,
+                keep_days=self.keep_days,
+                exclude_paths=[self.log_path] if self._current_path is not None else None,
+            )
+        finally:
+            self._next_cleanup_at = self._monotonic_provider() + self.cleanup_interval_seconds
 
 
 class LogManager:
-    def __init__(self, log_path: Path, original_stdout: TextIO, original_stderr: TextIO, log_file: TextIO) -> None:
-        self.log_path = log_path
+    def __init__(self, original_stdout: TextIO, original_stderr: TextIO, log_file: TextIO) -> None:
         self._original_stdout = original_stdout
         self._original_stderr = original_stderr
         self._log_file = log_file
+
+    @property
+    def log_path(self) -> Path:
+        return getattr(self._log_file, "log_path")
 
     def close(self) -> None:
         try:
@@ -167,16 +260,28 @@ def migrate_legacy_log_layout(log_root: Path) -> None:
             pass
 
 
-def cleanup_old_logs(log_root: Path, keep_days: int = DEFAULT_LOG_RETENTION_DAYS) -> None:
+def cleanup_old_logs(
+    log_root: Path,
+    keep_days: int = DEFAULT_LOG_RETENTION_DAYS,
+    exclude_paths: Iterable[Path] | None = None,
+) -> None:
     if not log_root.exists():
         return
 
     cutoff = datetime.now() - timedelta(days=keep_days)
+    excluded: set[Path] = set()
+    for path in exclude_paths or []:
+        try:
+            excluded.add(path.resolve())
+        except Exception:
+            continue
 
     for path in log_root.rglob("*"):
         if not path.is_file():
             continue
         try:
+            if path.resolve() in excluded:
+                continue
             modified = datetime.fromtimestamp(path.stat().st_mtime)
             if modified < cutoff:
                 path.unlink(missing_ok=True)
@@ -203,6 +308,7 @@ def setup_file_logging(
     keep_days: int = DEFAULT_LOG_RETENTION_DAYS,
     site_name: str = "general",
     max_log_bytes: int = DEFAULT_MAX_LOG_BYTES,
+    cleanup_interval_seconds: int = DEFAULT_LOG_CLEANUP_INTERVAL_SECONDS,
 ) -> LogManager:
     log_root = project_root / "log"
     log_root.mkdir(parents=True, exist_ok=True)
@@ -210,24 +316,24 @@ def setup_file_logging(
     migrate_legacy_log_layout(log_root)
 
     site_dir = log_root / _sanitize_site_name(site_name)
-    # Keep at most one month of logs for the current site.
-    effective_keep_days = min(max(int(keep_days), 1), DEFAULT_LOG_RETENTION_DAYS)
-    cleanup_old_logs(log_root=site_dir, keep_days=effective_keep_days)
-
-    month_dir = site_dir / datetime.now().strftime("%Y-%m")
-    month_dir.mkdir(parents=True, exist_ok=True)
-
-    log_file_path = month_dir / f"run_{datetime.now().strftime('%Y-%m-%d')}.txt"
+    effective_keep_days = max(int(keep_days), 1)
+    effective_max_log_bytes = max(int(max_log_bytes), 1)
+    effective_cleanup_interval_seconds = max(int(cleanup_interval_seconds), 1)
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    log_file = RotatingDailyLogFile(log_file_path, max_bytes=max_log_bytes, encoding="utf-8")
+    log_file = BoundedDailyLogFile(
+        site_dir=site_dir,
+        max_bytes=effective_max_log_bytes,
+        keep_days=effective_keep_days,
+        cleanup_interval_seconds=effective_cleanup_interval_seconds,
+        encoding="utf-8",
+    )
 
     sys.stdout = TeeStream(original_stdout, log_file)
     sys.stderr = TeeStream(original_stderr, log_file)
 
     return LogManager(
-        log_path=log_file_path,
         original_stdout=original_stdout,
         original_stderr=original_stderr,
         log_file=log_file,

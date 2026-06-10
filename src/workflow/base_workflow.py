@@ -176,7 +176,11 @@ class WorkflowCrawler:
         if isinstance(output_cfg, dict) and output_cfg.get("retention_days") is not None:
             raw = output_cfg.get("retention_days")
         else:
-            raw = self.config.get("log", {}).get("retention_days", 30)
+            site_log_cfg = self.config.get("log", {})
+            if isinstance(site_log_cfg, dict) and site_log_cfg.get("retention_days") is not None:
+                raw = site_log_cfg.get("retention_days")
+            else:
+                raw = 30
 
         try:
             days = int(raw)

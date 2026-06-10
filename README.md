@@ -39,7 +39,7 @@ SITE_USERNAME=你的用户名
 SITE_PASSWORD=你的密码
 ```
 
-3. 可选：在 `config/global.json` 里配置轮询默认项（轮询间隔、输入目录、处理站点）：
+3. 可选：在 `config/global.json` 里配置运行日志与轮询默认项：
 
 ```json
 {
@@ -50,6 +50,11 @@ SITE_PASSWORD=你的密码
 		"push_timeout_seconds": 30,
 		"push_retries": 1,
 		"sites": ["cargo", "cargonavi"],
+		"log": {
+			"max_mb": 80,
+			"retention_days": 7,
+			"cleanup_interval_seconds": 3600
+		},
 		"parallel": {
 			"enabled": true,
 			"max_workers": 6,
@@ -68,6 +73,10 @@ SITE_PASSWORD=你的密码
 配置项说明：
 
 - `watch`：轮询相关总配置对象。
+- `watch.log`：运行日志总配置对象。
+- `watch.log.max_mb`：单个运行日志文件大小上限（MB）。达到上限后不会生成 `.1/.2` 轮转文件，而是按环形覆盖保留最新日志窗口。
+- `watch.log.retention_days`：运行日志保留天数。超过天数的日志文件会被自动删除。
+- `watch.log.cleanup_interval_seconds`：常驻进程执行旧日志清理的周期（秒）。
 - `watch.enabled_by_default`：是否在未传 `--site/--config/--all-sites` 时自动进入轮询模式。`true` 表示默认启动即轮询。
 - `watch.interval_seconds`：轮询间隔（秒）。每次扫描 `input_root` 后等待该秒数再进行下一次扫描。
 - `watch.input_root`：轮询输入根目录。程序会扫描 `input_root/<site>/*.json`。
@@ -84,6 +93,12 @@ SITE_PASSWORD=你的密码
 - `watch.db_config.recrawl_skipped_without_history`：当单号被判定历史成功但找不到历史 output 时，是否自动回爬该单号。
 - `watch.db_config.state_db_path`：单号状态库路径（SQLite）。
 - input JSON 支持批量字段：`ContainerNo` / `MAWB` 可传字符串或数组；传数组时会逐条执行抓取并逐条推送。
+
+说明：
+
+- 运行日志会按 `log/<site>/<YYYY-MM>/run_<YYYY-MM-DD>.txt` 写入。
+- 当单个日志文件达到 `watch.log.max_mb` 后，只保留最近日志窗口，不再保留编号轮转历史文件。
+- `output` 清理策略保持原有站点配置逻辑，不会因为 `config/global.json` 的运行日志策略变化而被联动修改。
 
 优先级说明：
 

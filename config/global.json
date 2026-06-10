@@ -2,6 +2,10 @@
   "selenium_remote_url": "http://szh2vm0372.apac.bosch.com:4444/wd/hub",
   "watch": {
     "_descriptions": {
+      "log": "运行日志总配置对象。",
+      "log.max_mb": "单个运行日志文件大小上限（MB）；达到上限后按环形覆盖保留最新日志窗口。",
+      "log.retention_days": "日志文件保留天数；超过天数的日志会被周期性删除。",
+      "log.cleanup_interval_seconds": "常驻进程执行旧日志清理的周期（秒）。",
       "enabled_by_default": "是否默认启用轮询模式；当未传 --site/--config/--all-sites 时会自动进入 watch。",
       "interval_seconds": "轮询间隔（秒）。",
       "input_root": "轮询输入目录，按 input/<site>/*.json 扫描。",
@@ -36,6 +40,11 @@
     "sites": [
       "cargo"
     ],
+    "log": {
+      "max_mb": 80,
+      "retention_days": 7,
+      "cleanup_interval_seconds": 3600
+    },
     "cargo_fallback": {
       "enabled": true,
       "trigger_site": "cargo",
