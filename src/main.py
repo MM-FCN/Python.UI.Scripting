@@ -1121,10 +1121,16 @@ def _run_input_timer_mode(
     parallel_enabled = bool(parallel_cfg.get("enabled", False))
     parallel_max_workers = max(1, int(parallel_cfg.get("max_workers", 4)))
     parallel_chunk_size = int(parallel_cfg.get("chunk_size", 0))
-    skip_successful_items = bool(parallel_cfg.get("skip_successful_items", True))
-    force_output_on_skipped_success = bool(parallel_cfg.get("force_output_on_skipped_success", True))
-    recrawl_skipped_without_history = bool(parallel_cfg.get("recrawl_skipped_without_history", True))
-    state_db_raw = str(parallel_cfg.get("state_db_path", "state/crawl_item_state.db")).strip()
+    db_cfg_raw = global_cfg.get("watch", {}).get("db_config", {}) if isinstance(global_cfg.get("watch", {}), dict) else {}
+    db_cfg = db_cfg_raw if isinstance(db_cfg_raw, dict) else {}
+    skip_successful_items = bool(db_cfg.get("skip_successful_items", parallel_cfg.get("skip_successful_items", True)))
+    force_output_on_skipped_success = bool(
+        db_cfg.get("force_output_on_skipped_success", parallel_cfg.get("force_output_on_skipped_success", True))
+    )
+    recrawl_skipped_without_history = bool(
+        db_cfg.get("recrawl_skipped_without_history", parallel_cfg.get("recrawl_skipped_without_history", True))
+    )
+    state_db_raw = str(db_cfg.get("state_db_path", parallel_cfg.get("state_db_path", "state/crawl_item_state.db"))).strip()
     if not state_db_raw:
         state_db_raw = "state/crawl_item_state.db"
     state_db_path = Path(state_db_raw)

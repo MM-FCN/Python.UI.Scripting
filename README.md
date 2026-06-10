@@ -49,7 +49,18 @@ SITE_PASSWORD=你的密码
 		"input_root": "input",
 		"push_timeout_seconds": 30,
 		"push_retries": 1,
-		"sites": ["cargo", "cargonavi"]
+		"sites": ["cargo", "cargonavi"],
+		"parallel": {
+			"enabled": true,
+			"max_workers": 6,
+			"chunk_size": 0
+		},
+		"db_config": {
+			"skip_successful_items": true,
+			"force_output_on_skipped_success": true,
+			"recrawl_skipped_without_history": true,
+			"state_db_path": "state/crawl_item_state.db"
+		}
 	}
 }
 ```
@@ -63,6 +74,15 @@ SITE_PASSWORD=你的密码
 - `watch.push_timeout_seconds`：向 input JSON 里的 `Uri` 推送结果时的 HTTP 超时（秒）。
 - `watch.push_retries`：推送失败后的重试次数。`0` 表示只请求 1 次，`1` 表示最多 2 次。
 - `watch.sites`：允许轮询处理的 site 名单（数组）。例如 `cargo`、`cargonavi`。不在名单中的 site 输入文件会被跳过。
+- `watch.parallel`：批量输入并行抓取配置。
+- `watch.parallel.enabled`：是否启用批量并行模式。
+- `watch.parallel.max_workers`：允许启动的最大 worker 数量。
+- `watch.parallel.chunk_size`：每个 worker 处理的单号数量；`<=0` 时按总数自动平均分配。
+- `watch.db_config`：单号状态与历史输出复用配置。
+- `watch.db_config.skip_successful_items`：是否跳过历史成功单号，避免重复爬取。
+- `watch.db_config.force_output_on_skipped_success`：当单号因历史成功被跳过时，是否仍基于历史数据生成新的 output 文件。
+- `watch.db_config.recrawl_skipped_without_history`：当单号被判定历史成功但找不到历史 output 时，是否自动回爬该单号。
+- `watch.db_config.state_db_path`：单号状态库路径（SQLite）。
 - input JSON 支持批量字段：`ContainerNo` / `MAWB` 可传字符串或数组；传数组时会逐条执行抓取并逐条推送。
 
 优先级说明：
