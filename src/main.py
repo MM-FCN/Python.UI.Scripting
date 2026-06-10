@@ -1148,6 +1148,7 @@ def _run_container_fallback_chain(
 def _run_input_timer_mode(
     *,
     project_root: Path,
+    global_cfg: dict[str, Any],
     input_root: Path,
     global_cfg: dict[str, Any],
     headless: bool,
@@ -2194,6 +2195,7 @@ def main() -> None:
                 watch_sites = _parse_watch_sites(watch_cfg.get("sites"))
             _run_input_timer_mode(
                 project_root=project_root,
+                global_cfg=global_cfg,
                 input_root=input_root,
                 global_cfg=global_cfg,
                 headless=args.headless,
