@@ -315,6 +315,8 @@ def _persist_deferred_output_items(
         config["__defer_output_save"] = False
         crawler = create_workflow_crawler(config=config, headless=headless, params=params)
 
+        grouped_records: dict[str, dict[str, Any]] = {}
+
         for item in deferred_items:
             if not isinstance(item, dict):
                 continue
@@ -322,9 +324,35 @@ def _persist_deferred_output_items(
             records = item.get("records", [])
             if not isinstance(output_cfg, dict) or not isinstance(records, list):
                 continue
-            crawler.config["output"] = output_cfg
+
+            # Multiple parallel jobs can target the same output path in the same second.
+            # Group and merge first so we write once per output config and avoid overwrite.
+            try:
+                group_key = json.dumps(output_cfg, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                group_key = repr(output_cfg)
+
+            bucket = grouped_records.setdefault(
+                group_key,
+                {
+                    "output_cfg": dict(output_cfg),
+                    "records": [],
+                },
+            )
+            bucket_records = bucket.get("records", [])
+            if isinstance(bucket_records, list):
+                bucket_records.extend(records)
+
+        for grouped in grouped_records.values():
+            grouped_output_cfg = grouped.get("output_cfg", {})
+            grouped_rows = grouped.get("records", [])
+            if not isinstance(grouped_output_cfg, dict) or not isinstance(grouped_rows, list):
+                continue
+            if not grouped_rows:
+                continue
+            crawler.config["output"] = grouped_output_cfg
             crawler.popup_data = []
-            crawler._save_records(records)
+            crawler._save_records(grouped_rows)
         return True
     except Exception as e:
         print(f"[OUTPUT] Failed to persist deferred records for {config_path}: {type(e).__name__}: {e}")
@@ -1907,18 +1935,34 @@ def _run_input_timer_mode(
                             f"[WATCH] Persisting deferred output files after callback success: "
                             f"jobs={len(deferred_output_jobs)}"
                         )
+                        grouped_deferred_by_cfg: dict[str, dict[str, Any]] = {}
                         for item in deferred_output_jobs:
                             one_cfg = str(item.get("config_path", "")).strip()
-                            one_params = item.get("params", {})
-                            one_deferred_items = item.get("deferred_output_items", [])
                             if not one_cfg:
                                 continue
+                            one_params = item.get("params", {})
+                            one_deferred_items = item.get("deferred_output_items", [])
+
+                            bucket = grouped_deferred_by_cfg.setdefault(
+                                one_cfg,
+                                {
+                                    "params": dict(one_params) if isinstance(one_params, dict) else {},
+                                    "deferred_output_items": [],
+                                },
+                            )
+                            bucket_items = bucket.get("deferred_output_items", [])
+                            if isinstance(bucket_items, list) and isinstance(one_deferred_items, list):
+                                bucket_items.extend(one_deferred_items)
+
+                        for one_cfg, grouped in grouped_deferred_by_cfg.items():
+                            grouped_params = grouped.get("params", {})
+                            grouped_items = grouped.get("deferred_output_items", [])
                             ok_save = _persist_deferred_output_items(
                                 config_path=one_cfg,
                                 headless=headless,
-                                params=one_params if isinstance(one_params, dict) else {},
+                                params=grouped_params if isinstance(grouped_params, dict) else {},
                                 base_url_override=base_url_override,
-                                deferred_items=one_deferred_items if isinstance(one_deferred_items, list) else [],
+                                deferred_items=grouped_items if isinstance(grouped_items, list) else [],
                                 selenium_remote_url=selenium_remote_url,
                             )
                             if not ok_save:

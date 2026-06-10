@@ -137,7 +137,7 @@
         ],
         "fields": [
           {
-            "name": " Place",
+            "name": "Place",
             "by": "css",
             "selector": "td:nth-child(1) .EventTable_country-name__fax8l",
             "attr": "text"
