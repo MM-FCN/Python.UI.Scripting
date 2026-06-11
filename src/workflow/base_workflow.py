@@ -456,6 +456,7 @@ class WorkflowCrawler:
     def _run_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """在同一登录会话中顺序执行多个页面任务。"""
         all_records: List[Dict[str, Any]] = []
+        task_outputs: List[Dict[str, Any]] = []
         base_scrape = self.config.get("scrape", {})
         base_output = self.config.get("output", {})
 
@@ -479,12 +480,23 @@ class WorkflowCrawler:
                     print("[FALLBACK] no_data matched before scraping, skip scrape and save empty result.")
                     records = []
                     self._save_records(records)
+                    task_outputs.append({
+                        "task_name": str(task_name),
+                        "task_key": str(task.get("merge_key", "")).strip(),
+                        "records": [],
+                    })
                     continue
 
                 records = self._scrape_records()
                 self._save_records(records)
 
                 task_records = self.popup_data if self.popup_data else records
+                task_records = self._attach_request_identifiers(task_records)
+                task_outputs.append({
+                    "task_name": str(task_name),
+                    "task_key": str(task.get("merge_key", "")).strip(),
+                    "records": task_records,
+                })
                 all_records.extend(task_records)
                 print(
                     f"[TASK {idx}] {task_name} completed, records={len(task_records)} "
@@ -494,6 +506,11 @@ class WorkflowCrawler:
                 print(f"[FALLBACK] {e}; stop current task early and save empty result.")
                 records = []
                 self._save_records(records)
+                task_outputs.append({
+                    "task_name": str(task_name),
+                    "task_key": str(task.get("merge_key", "")).strip(),
+                    "records": [],
+                })
                 continue
             except Exception as e:
                 print(f"[ERROR] Task '{task_name}' failed: {type(e).__name__}: {e}")
@@ -503,10 +520,99 @@ class WorkflowCrawler:
         self._current_task_name = ""
         self._active_scrape_cfg = {}
 
+        self._save_merged_task_output(task_outputs)
+
         self.config["scrape"] = base_scrape
         self.config["output"] = base_output
         print(f"[TASK] All tasks finished, total aggregated records={len(all_records)}")
         return all_records
+
+    def _save_merged_task_output(self, task_outputs: List[Dict[str, Any]]) -> None:
+        merge_cfg = self.config.get("merged_output", {})
+        if not isinstance(merge_cfg, dict) or not bool(merge_cfg.get("enabled", False)):
+            return
+
+        configured_keys = merge_cfg.get("global_identifier_keys", ["ContainerNo", "MAWB", "HAWNO"])
+        if isinstance(configured_keys, list):
+            tracked_keys = [str(k).strip() for k in configured_keys if str(k).strip()]
+        else:
+            tracked_keys = ["ContainerNo", "MAWB", "HAWNO"]
+
+        payload: Dict[str, Any] = {}
+        for key in tracked_keys:
+            value = self.params.get(key)
+            if value:
+                payload[key] = value
+        site_name = str(self.config.get("__site_name", "")).strip().lower()
+        if site_name:
+            payload.setdefault("source_site", site_name)
+
+        for item in task_outputs:
+            task_name = str(item.get("task_name", "")).strip()
+            explicit_key = str(item.get("task_key", "")).strip()
+            records = item.get("records", [])
+            if not isinstance(records, list):
+                records = []
+
+            cleaned_records: List[Dict[str, Any]] = []
+            for row in records:
+                if isinstance(row, dict):
+                    cleaned_records.append({k: v for k, v in row.items() if k not in tracked_keys})
+                else:
+                    cleaned_records.append({"value": row})
+
+            if explicit_key:
+                key = explicit_key
+            else:
+                key = re.sub(r"[^a-zA-Z0-9]+", "_", task_name).strip("_").lower() or "task"
+
+            # Avoid key overwrite when duplicate task names/keys exist.
+            base_key = key
+            suffix = 2
+            while key in payload:
+                key = f"{base_key}_{suffix}"
+                suffix += 1
+
+            payload[key] = cleaned_records
+
+        if bool(self.config.get("__defer_output_save", False)):
+            deferred = self.config.setdefault("__deferred_output_items", [])
+            if isinstance(deferred, list):
+                deferred.append({
+                    "kind": "merged_payload",
+                    "records": [payload],
+                })
+            print("[OUTPUT] Deferred save enabled, queued merged payload for callback upload.")
+            return
+
+        output_path = Path(str(merge_cfg.get("path", "output/merged_tasks.json")))
+        if bool(merge_cfg.get("append_timestamp", True)):
+            output_path = self._append_timestamp_to_path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cleanup_output_dir(output_path.parent)
+
+        as_array = bool(merge_cfg.get("as_array", True))
+        append_to_existing = bool(merge_cfg.get("append_to_existing", False))
+
+        final_payload: Any = payload
+        if as_array:
+            if append_to_existing and output_path.exists():
+                try:
+                    existing = json.loads(output_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = []
+                if isinstance(existing, list):
+                    existing.append(payload)
+                    final_payload = existing
+                else:
+                    final_payload = [payload]
+            else:
+                final_payload = [payload]
+
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(final_payload, f, ensure_ascii=False, indent=2)
+
+        print(f"[OUTPUT] Saved merged task payload to {output_path}")
 
     def _start_browser(self) -> None:
         browser = str(self.config.get("browser", "firefox")).strip().lower()
@@ -2165,31 +2271,8 @@ class WorkflowCrawler:
         if not isinstance(no_data_cfg, dict):
             return False
 
-        # 1) Check configured no-data selectors in scrape config (strong signal).
-        scrape_cfg = self._active_scrape_cfg if isinstance(self._active_scrape_cfg, dict) else self.config.get("scrape", {})
-        no_data_selectors: List[str] = []
-        if isinstance(scrape_cfg, dict):
-            raw_no_data_selectors = scrape_cfg.get("no_data_selectors", [])
-            if isinstance(raw_no_data_selectors, str):
-                no_data_selectors = [s.strip() for s in raw_no_data_selectors.split(",") if s.strip()]
-            elif isinstance(raw_no_data_selectors, list):
-                no_data_selectors = [str(s).strip() for s in raw_no_data_selectors if str(s).strip()]
-
-        for sel in no_data_selectors:
-            try:
-                elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elements:
-                    if not el.is_displayed():
-                        continue
-                    element_text = (el.text or "").strip()
-                    if not element_text:
-                        continue
-                    print(f"[FALLBACK] no_data matched by selector: {sel}")
-                    return True
-            except Exception:
-                continue
-
-        # 2) Check page text against fallback.no_data.text_contains.
+        # Check page text against fallback.no_data.text_contains only.
+        # This avoids treating "page not opened/target not reached" as no-data.
         raw_text_contains = no_data_cfg.get("text_contains", [])
         text_needles: List[str] = []
         if isinstance(raw_text_contains, str):
@@ -2197,17 +2280,22 @@ class WorkflowCrawler:
         elif isinstance(raw_text_contains, list):
             text_needles = [str(s).strip().lower() for s in raw_text_contains if str(s).strip()]
 
-        if text_needles:
-            page_text = ""
-            try:
-                page_text = (self.driver.find_element(By.TAG_NAME, "body").text or "").lower()
-            except Exception:
-                page_text = ""
+        if not text_needles:
+            return False
 
-            for needle in text_needles:
-                if needle and needle in page_text:
-                    print(f"[FALLBACK] no_data matched by text: {needle}")
-                    return True
+        page_text = ""
+        try:
+            page_text = (self.driver.find_element(By.TAG_NAME, "body").text or "").lower()
+        except Exception:
+            page_text = ""
+
+        if not page_text.strip():
+            return False
+
+        for needle in text_needles:
+            if needle and needle in page_text:
+                print(f"[FALLBACK] no_data matched by text: {needle}")
+                return True
 
         return False
 

@@ -10,11 +10,21 @@
   },
   "default_timeout": 15,
   "download_dir": "output/hyundai/downloads",
+  "merged_output": {
+    "enabled": true,
+    "path": "output/hyundai/hyundai_merged.json",
+    "append_timestamp": true,
+    "as_array": true,
+    "global_identifier_keys": [
+      "ContainerNo"
+    ]
+  },
   "fallback": {
     "no_data": {
       "require_any_fields": [
         "Origin",
-        "Destination"
+        "Destination",
+        "VesselVoyage"
       ],
       "text_contains": [
         "container number is invalid. please try it again with correct number",
@@ -57,6 +67,7 @@
   "tasks": [
     {
       "name": "hyundai-tracking",
+      "merge_key": "Tracking",
       "navigation_steps": [
         {
           "action": "sleep",
@@ -131,6 +142,33 @@
       "output": {
         "format": "json",
         "path": "output/hyundai/hyundai_tracking.json"
+      }
+    },
+    {
+      "name": "hyundai-vessel-voyage",
+      "merge_key": "VesselVoyage",
+      "navigation_steps": [],
+      "scrape": {
+        "list_by": "xpath",
+        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[normalize-space()='Vessel / Voyage'] and .//thead//div[normalize-space()='Arrival']]//tbody/tr",
+        "allow_empty": true,
+        "no_data_selectors": [
+          ".input .icon.red.emphasis",
+          ".icon.red.emphasis"
+        ],
+        "fields": [
+          {
+            "name": "VesselVoyage",
+            "by": "css",
+            "selector": "td:nth-child(1) .text",
+            "attr": "text"
+          }
+        ],
+        "max_pages": 1
+      },
+      "output": {
+        "format": "json",
+        "path": "output/hyundai/hyundai_vessel_voyage.json"
       }
     }
   ]

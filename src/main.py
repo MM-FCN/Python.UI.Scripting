@@ -204,6 +204,7 @@ def run_config(
     print(f"{'='*60}")
     try:
         config = load_config(config_path)
+        config["__site_name"] = Path(config_path).resolve().parent.name
         if selenium_remote_url:
             config["selenium_remote_url"] = selenium_remote_url
         if base_url_override:
@@ -242,6 +243,7 @@ def run_config_batch_reuse_session(
     print(f"{'='*60}")
     try:
         config = load_config(config_path)
+        config["__site_name"] = Path(config_path).resolve().parent.name
         if selenium_remote_url:
             config["selenium_remote_url"] = selenium_remote_url
         if base_url_override:
@@ -509,8 +511,20 @@ def _push_records_to_uri(
             job_records = job.get("records", [])
             if not isinstance(job_records, list):
                 job_records = []
+            job_deferred_items = job.get("deferred_output_items", [])
+            callback_records = job_records
+            if isinstance(job_deferred_items, list):
+                for one_item in job_deferred_items:
+                    if not isinstance(one_item, dict):
+                        continue
+                    if str(one_item.get("kind", "")).strip().lower() != "merged_payload":
+                        continue
+                    merged_records = one_item.get("records", [])
+                    if isinstance(merged_records, list):
+                        callback_records = merged_records
+                    break
             params_list.append(dict(job_params))
-            tagged_records.extend(_tag_rows(job_records, job_params))
+            tagged_records.extend(_tag_rows(callback_records, job_params))
     else:
         tagged_records = _tag_rows(records, params)
 
@@ -859,11 +873,17 @@ def _collect_site_output_json_candidates(project_root: Path, site_name: str) -> 
     except Exception:
         return []
 
-    candidate_output_paths: list[str] = []
+    candidate_output_paths: list[tuple[str, int]] = []
+
+    merged_cfg = cfg.get("merged_output", {}) if isinstance(cfg.get("merged_output", {}), dict) else {}
+    merged_output_path = str(merged_cfg.get("path", "")).strip()
+    if bool(merged_cfg.get("enabled", False)) and merged_output_path:
+        candidate_output_paths.append((merged_output_path, 0))
+
     output_cfg = cfg.get("output", {}) if isinstance(cfg.get("output", {}), dict) else {}
     output_path = str(output_cfg.get("path", "")).strip()
     if output_path:
-        candidate_output_paths.append(output_path)
+        candidate_output_paths.append((output_path, 1))
 
     tasks = cfg.get("tasks", [])
     if isinstance(tasks, list):
@@ -873,11 +893,10 @@ def _collect_site_output_json_candidates(project_root: Path, site_name: str) -> 
             task_output = task.get("output", {}) if isinstance(task.get("output", {}), dict) else {}
             task_output_path = str(task_output.get("path", "")).strip()
             if task_output_path:
-                candidate_output_paths.append(task_output_path)
+                candidate_output_paths.append((task_output_path, 2))
 
-    files: list[Path] = []
-    seen: set[str] = set()
-    for raw in candidate_output_paths:
+    ranked_files: dict[str, tuple[Path, int, float]] = {}
+    for raw, priority in candidate_output_paths:
         p = Path(raw)
         if not p.is_absolute():
             p = (project_root / p).resolve()
@@ -894,13 +913,22 @@ def _collect_site_output_json_candidates(project_root: Path, site_name: str) -> 
         for pattern in patterns:
             for one in parent.glob(pattern):
                 key = str(one.resolve())
-                if key in seen:
-                    continue
-                seen.add(key)
-                files.append(one)
+                try:
+                    mtime = one.stat().st_mtime
+                except Exception:
+                    mtime = 0.0
 
-    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    return files
+                existing = ranked_files.get(key)
+                if existing is None:
+                    ranked_files[key] = (one, priority, mtime)
+                    continue
+
+                _, old_priority, old_mtime = existing
+                if priority < old_priority or (priority == old_priority and mtime > old_mtime):
+                    ranked_files[key] = (one, priority, mtime)
+
+    ordered = sorted(ranked_files.values(), key=lambda item: (item[1], -item[2]))
+    return [path for path, _, _ in ordered]
 
 
 def _load_historical_records_map(
@@ -1150,7 +1178,6 @@ def _run_input_timer_mode(
     project_root: Path,
     global_cfg: dict[str, Any],
     input_root: Path,
-    global_cfg: dict[str, Any],
     headless: bool,
     interval_seconds: int,
     base_runtime_params: dict[str, str],
@@ -1494,10 +1521,35 @@ def _run_input_timer_mode(
                         one_params[state_track_field] = item_value
                         historical_rows = historical_map.get(item_value, [])
                         if historical_rows:
-                            skipped_jobs_for_push.append({
+                            merged_hint = any(
+                                isinstance(r, dict)
+                                and any(isinstance(v, list) for v in r.values())
+                                for r in historical_rows
+                            )
+                            print(
+                                f"[WATCH] skipped-success historical hit: field={state_track_field}, "
+                                f"value={item_value}, records={len(historical_rows)}, "
+                                f"prefer_merged={'yes' if merged_hint else 'no'}"
+                            )
+                            one_job: dict[str, Any] = {
                                 "params": one_params,
                                 "records": historical_rows,
-                            })
+                            }
+                            if merged_hint:
+                                one_job["deferred_output_items"] = [{
+                                    "kind": "merged_payload",
+                                    "records": historical_rows,
+                                }]
+                                print(
+                                    f"[WATCH] skipped-success callback will use merged historical payload: "
+                                    f"field={state_track_field}, value={item_value}"
+                                )
+                            else:
+                                print(
+                                    f"[WATCH] skipped-success callback falls back to flat historical records: "
+                                    f"field={state_track_field}, value={item_value}"
+                                )
+                            skipped_jobs_for_push.append(one_job)
                             continue
 
                         if recrawl_skipped_without_history:
@@ -1717,7 +1769,11 @@ def _run_input_timer_mode(
 
                                         processed_jobs.append({"params": dict(one_params), "records": normalized_records})
                                         if callback_uri:
-                                            push_jobs.append({"params": dict(one_params), "records": normalized_records})
+                                            push_jobs.append({
+                                                "params": dict(one_params),
+                                                "records": normalized_records,
+                                                "deferred_output_items": trigger_deferred_items,
+                                            })
                                             if trigger_deferred_items:
                                                 deferred_output_jobs.append({
                                                     "config_path": str(trigger_cfg_path),
@@ -1755,7 +1811,11 @@ def _run_input_timer_mode(
                                         success = False
                                         break
                                     if callback_uri:
-                                        push_jobs.append({"params": dict(fb_params), "records": fb_records})
+                                        push_jobs.append({
+                                            "params": dict(fb_params),
+                                            "records": fb_records,
+                                            "deferred_output_items": fb_deferred_items,
+                                        })
                                         if fb_deferred_items:
                                             source_site = str(fb_records[0].get("source_site", "")).strip().lower() if fb_records else ""
                                             if source_site:
@@ -1828,7 +1888,11 @@ def _run_input_timer_mode(
                                         success = False
                                     processed_jobs.append({"params": dict(one_params), "records": one_records})
                                     if callback_uri and ok_one:
-                                        push_jobs.append({"params": dict(one_params), "records": one_records})
+                                        push_jobs.append({
+                                            "params": dict(one_params),
+                                            "records": one_records,
+                                            "deferred_output_items": one_deferred_items,
+                                        })
                                         if isinstance(one_deferred_items, list) and one_deferred_items:
                                             source_site = str(one_records[0].get("source_site", "")).strip().lower() if one_records else ""
                                             if source_site:
@@ -1863,7 +1927,11 @@ def _run_input_timer_mode(
                                         success = False
                                         break
                                     if callback_uri:
-                                        push_jobs.append({"params": dict(one_params), "records": one_records})
+                                        push_jobs.append({
+                                            "params": dict(one_params),
+                                            "records": one_records,
+                                            "deferred_output_items": one_deferred_items,
+                                        })
                                         if one_deferred_items:
                                             source_site = str(one_records[0].get("source_site", "")).strip().lower() if one_records else ""
                                             if source_site:
@@ -2197,7 +2265,6 @@ def main() -> None:
                 project_root=project_root,
                 global_cfg=global_cfg,
                 input_root=input_root,
-                global_cfg=global_cfg,
                 headless=args.headless,
                 interval_seconds=interval_seconds,
                 base_runtime_params=runtime_params,
