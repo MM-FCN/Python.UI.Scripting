@@ -18,6 +18,7 @@
       "cargo_fallback.enabled": "是否启用 cargo 箱号跨站点兜底链路。",
       "cargo_fallback.trigger_site": "仅当输入文件所属站点等于该值时启用兜底。默认 cargo。",
       "cargo_fallback.sites_chain": "按顺序尝试的站点列表，命中数据即停止。",
+      "cargo_fallback.prefix_site_map": "按站点声明箱号前缀映射；命中前缀时先尝试对应站点，再按默认 sites_chain 的剩余顺序继续。",
       "cargo_fallback.site_error_retries": "单个站点执行报错时重试次数（不含首次），仅在得到有数据或明确无数据后才会决定是否继续下个站点。",
       "cargo_fallback.reuse_trigger_site_session": "是否复用触发站点（如 cargo）单浏览器会话串行处理整批箱号；false 时按并发设置处理。",
       "parallel": "批量输入并行抓取配置。",
@@ -55,11 +56,26 @@
         "msc",
         "maersk"
       ],
+      "prefix_site_map": {
+        "cargo": [
+          "NYKU",
+          "ONEU"
+        ],
+        "hyundai": [
+          "HMMU"
+        ],
+        "msc": [
+          "MSMU"
+        ],
+        "maersk": [
+          "MSKU"
+        ]
+      },
       "site_error_retries": 2,
       "reuse_trigger_site_session": false
     },
     "parallel": {
-      "enabled": true,
+      "enabled": false,
       "max_workers": 6,
       "chunk_size": 0
     },

@@ -775,6 +775,56 @@ def _normalize_item_value(item_field: str, value: Any) -> str:
     return normalized
 
 
+def _parse_fallback_prefix_site_map(raw_map: Any) -> list[tuple[str, str]]:
+    if not isinstance(raw_map, dict):
+        return []
+
+    rules: list[tuple[str, str]] = []
+    for raw_site, raw_prefixes in raw_map.items():
+        site_name = str(raw_site).strip().lower()
+        if not site_name:
+            continue
+
+        if isinstance(raw_prefixes, str):
+            prefixes = [item.strip() for item in raw_prefixes.split(",")]
+        elif isinstance(raw_prefixes, (list, tuple, set)):
+            prefixes = [str(item).strip() for item in raw_prefixes]
+        else:
+            continue
+
+        for prefix in prefixes:
+            normalized_prefix = str(prefix).strip().upper()
+            if normalized_prefix:
+                rules.append((normalized_prefix, site_name))
+
+    return rules
+
+
+def _resolve_container_sites_chain(
+    container_no: str,
+    default_sites_chain: list[str],
+    prefix_site_rules: list[tuple[str, str]],
+) -> tuple[list[str], Optional[str], Optional[str]]:
+    resolved_chain = [str(site).strip().lower() for site in default_sites_chain if str(site).strip()]
+    normalized_container_no = _normalize_item_value("ContainerNo", container_no)
+    if not normalized_container_no or not resolved_chain or not prefix_site_rules:
+        return resolved_chain, None, None
+
+    matched_prefix = ""
+    matched_site = ""
+    for prefix, site_name in prefix_site_rules:
+        if normalized_container_no.startswith(prefix) and len(prefix) > len(matched_prefix):
+            matched_prefix = prefix
+            matched_site = site_name
+
+    if not matched_prefix or not matched_site or matched_site not in resolved_chain:
+        return resolved_chain, None, None
+
+    reordered_chain = [matched_site]
+    reordered_chain.extend(site_name for site_name in resolved_chain if site_name != matched_site)
+    return reordered_chain, matched_prefix, matched_site
+
+
 def _load_successful_items(
     db_path: Path,
     *,
@@ -1012,7 +1062,7 @@ def _load_historical_records_map(
     return matched
 
 
-def _split_into_chunks(items: list[dict[str, str]], worker_count: int, chunk_size: int) -> list[list[dict[str, str]]]:
+def _split_into_chunks(items: list[dict[str, Any]], worker_count: int, chunk_size: int) -> list[list[dict[str, Any]]]:
     if not items:
         return []
     if chunk_size <= 0:
@@ -1088,11 +1138,13 @@ def _run_container_fallback_chain(
     site_error_retries: int = 2,
     defer_output_save: bool = False,
     selenium_remote_url: Optional[str] = None,
+    soft_fail_site_error_count: int = 0,
 ) -> tuple[bool, dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     params = dict(base_runtime_params)
     params["ContainerNo"] = container_no
     tried_sites: list[str] = []
     max_attempts = max(1, int(site_error_retries) + 1)
+    remaining_soft_fail_site_errors = max(0, int(soft_fail_site_error_count))
 
     for one_site in sites_chain:
         site_name = str(one_site).strip().lower()
@@ -1137,6 +1189,14 @@ def _run_container_fallback_chain(
 
         tried_sites.append(site_name)
         if not ok:
+            if remaining_soft_fail_site_errors > 0:
+                remaining_soft_fail_site_errors -= 1
+                print(
+                    f"[FALLBACK] Site '{site_name}' failed after {max_attempts} attempts; "
+                    "continue next site in resolved chain"
+                )
+                continue
+
             error_record = {
                 "ContainerNo": container_no,
                 "source_site": site_name,
@@ -1213,11 +1273,25 @@ def _run_input_timer_mode(
     if site_error_retries < 0:
         site_error_retries = 0
     reuse_trigger_site_session = bool(fallback_cfg.get("reuse_trigger_site_session", True))
+    fallback_prefix_site_rules = _parse_fallback_prefix_site_map(fallback_cfg.get("prefix_site_map", {}))
+    unknown_prefix_sites = sorted({site_name for _, site_name in fallback_prefix_site_rules if site_name not in fallback_chain})
+    fallback_prefix_site_rules = [
+        (prefix, site_name)
+        for prefix, site_name in fallback_prefix_site_rules
+        if site_name in fallback_chain
+    ]
     if fallback_enabled:
         print(
             f"[WATCH] Cargo fallback enabled: trigger_site={fallback_trigger_site}, "
             f"chain={fallback_chain}, site_error_retries={site_error_retries}"
         )
+        if fallback_prefix_site_rules:
+            route_summary = ", ".join(f"{prefix}->{site_name}" for prefix, site_name in fallback_prefix_site_rules)
+            print(f"[WATCH] Cargo prefix routing enabled: {route_summary}")
+        if unknown_prefix_sites:
+            print(
+                f"[WATCH] Ignored cargo prefix routing sites not present in sites_chain: {unknown_prefix_sites}"
+            )
 
     parallel_cfg = parallel_cfg if isinstance(parallel_cfg, dict) else {}
     parallel_enabled = bool(parallel_cfg.get("enabled", False))
@@ -1670,7 +1744,7 @@ def _run_input_timer_mode(
                     and has_container_input
                 )
                 if use_fallback_chain:
-                    fallback_job_params_list: list[dict[str, str]] = []
+                    fallback_jobs: list[dict[str, Any]] = []
                     for one_params in job_params_list:
                         if not isinstance(one_params, dict):
                             continue
@@ -1682,9 +1756,27 @@ def _run_input_timer_mode(
                             continue
                         fallback_one_params = dict(one_params)
                         fallback_one_params["ContainerNo"] = container_value
-                        fallback_job_params_list.append(fallback_one_params)
+                        resolved_chain, matched_prefix, matched_site = _resolve_container_sites_chain(
+                            container_value,
+                            fallback_chain,
+                            fallback_prefix_site_rules,
+                        )
+                        soft_fail_site_error_count = 0
+                        if matched_site and fallback_chain and matched_site != fallback_chain[0]:
+                            soft_fail_site_error_count = 1
+                            print(
+                                f"[FALLBACK] Prefix route matched: ContainerNo={container_value}, "
+                                f"prefix={matched_prefix}, preferred_site={matched_site}, chain={resolved_chain}"
+                            )
 
-                    container_values = [p["ContainerNo"] for p in fallback_job_params_list]
+                        fallback_jobs.append({
+                            "container_no": container_value,
+                            "params": fallback_one_params,
+                            "sites_chain": resolved_chain,
+                            "soft_fail_site_error_count": soft_fail_site_error_count,
+                        })
+
+                    container_values = [str(job.get("container_no", "")) for job in fallback_jobs if str(job.get("container_no", ""))]
 
                     if not container_values:
                         print("[FALLBACK] No ContainerNo found in input, fallback chain skipped")
@@ -1696,14 +1788,28 @@ def _run_input_timer_mode(
                         can_reuse_trigger_site = (
                             reuse_trigger_site_session
                             and len(container_values) > 1
-                            and bool(fallback_chain)
-                            and fallback_chain[0] == fallback_trigger_site
+                            and all(
+                                isinstance(job.get("sites_chain"), list)
+                                and job.get("sites_chain")
+                                and str(job.get("sites_chain")[0]).strip().lower() == fallback_trigger_site
+                                and int(job.get("soft_fail_site_error_count", 0)) == 0
+                                for job in fallback_jobs
+                            )
                         )
 
                         if can_reuse_trigger_site:
                             trigger_site = fallback_trigger_site
                             trigger_cfg_path = project_root / "config" / "sites" / trigger_site / "config.json"
-                            trigger_params_list = [dict(p) for p in fallback_job_params_list]
+                            trigger_params_list = [
+                                dict(job.get("params", {}))
+                                for job in fallback_jobs
+                                if isinstance(job.get("params", {}), dict)
+                            ]
+                            fallback_job_by_container = {
+                                str(job.get("container_no", "")): job
+                                for job in fallback_jobs
+                                if str(job.get("container_no", ""))
+                            }
 
                             print(
                                 f"[FALLBACK] Reusing one '{trigger_site}' browser session for "
@@ -1715,6 +1821,7 @@ def _run_input_timer_mode(
                                 params_list=trigger_params_list,
                                 base_url_override=base_url_override,
                                 defer_output_save=bool(callback_uri),
+                                selenium_remote_url=selenium_remote_url,
                             )
                             if not ok_trigger:
                                 success = False
@@ -1734,14 +1841,17 @@ def _run_input_timer_mode(
                                     if container_key and container_key not in trigger_result_by_container:
                                         trigger_result_by_container[container_key] = item
 
-                                downstream_chain = fallback_chain[1:]
                                 for idx, container_no in enumerate(container_values, start=1):
                                     print(
                                         f"[FALLBACK] Container job {idx}/{len(container_values)}: {container_no}"
                                     )
                                     container_key = _normalize_item_value("ContainerNo", container_no)
-                                    one_params = dict(runtime_params)
-                                    one_params["ContainerNo"] = container_no
+                                    job_meta = fallback_job_by_container.get(container_key, {})
+                                    one_params = (
+                                        dict(job_meta.get("params", {}))
+                                        if isinstance(job_meta.get("params", {}), dict)
+                                        else {"ContainerNo": container_no}
+                                    )
 
                                     trigger_job = trigger_result_by_container.get(container_key)
                                     trigger_records = []
@@ -1782,6 +1892,11 @@ def _run_input_timer_mode(
                                                 })
                                         continue
 
+                                    downstream_chain = (
+                                        list(job_meta.get("sites_chain", []))[1:]
+                                        if isinstance(job_meta.get("sites_chain"), list)
+                                        else fallback_chain[1:]
+                                    )
                                     if not downstream_chain:
                                         no_hit_records = [{
                                             "ContainerNo": container_no,
@@ -1832,7 +1947,7 @@ def _run_input_timer_mode(
                             if run_parallel:
                                 worker_count = min(parallel_max_workers, len(container_values))
                                 chunk_lists = _split_into_chunks(
-                                    fallback_job_params_list,
+                                    fallback_jobs,
                                     worker_count=worker_count,
                                     chunk_size=parallel_chunk_size,
                                 )
@@ -1840,19 +1955,20 @@ def _run_input_timer_mode(
                                     f"[FALLBACK] Parallel mode: workers={worker_count}, chunks={len(chunk_lists)}"
                                 )
 
-                                def _run_fallback_chunk(chunk: list[dict[str, str]]) -> list[dict[str, Any]]:
+                                def _run_fallback_chunk(chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
                                     chunk_results: list[dict[str, Any]] = []
                                     for one in chunk:
-                                        one_container = _normalize_item_value(
-                                            "ContainerNo",
-                                            one.get("ContainerNo", ""),
-                                        )
+                                        one_container = _normalize_item_value("ContainerNo", one.get("container_no", ""))
                                         if not one_container:
                                             continue
                                         ok_one, one_params, one_records, one_deferred_items = _run_container_fallback_chain(
                                             project_root=project_root,
                                             container_no=one_container,
-                                            sites_chain=fallback_chain,
+                                            sites_chain=(
+                                                list(one.get("sites_chain", []))
+                                                if isinstance(one.get("sites_chain"), list)
+                                                else fallback_chain
+                                            ),
                                             headless=headless,
                                             base_runtime_params=runtime_params,
                                             base_url_override=base_url_override,
@@ -1860,6 +1976,7 @@ def _run_input_timer_mode(
                                             site_error_retries=site_error_retries,
                                             defer_output_save=bool(callback_uri),
                                             selenium_remote_url=selenium_remote_url,
+                                            soft_fail_site_error_count=int(one.get("soft_fail_site_error_count", 0)),
                                         )
                                         chunk_results.append({
                                             "ok": ok_one,
@@ -1905,15 +2022,19 @@ def _run_input_timer_mode(
                                                 "deferred_output_items": one_deferred_items,
                                             })
                             else:
-                                for idx, one_job_params in enumerate(fallback_job_params_list, start=1):
-                                    container_no = one_job_params["ContainerNo"]
+                                for idx, one_job in enumerate(fallback_jobs, start=1):
+                                    container_no = str(one_job.get("container_no", "")).strip()
                                     print(
                                         f"[FALLBACK] Container job {idx}/{len(container_values)}: {container_no}"
                                     )
                                     ok, one_params, one_records, one_deferred_items = _run_container_fallback_chain(
                                         project_root=project_root,
                                         container_no=container_no,
-                                        sites_chain=fallback_chain,
+                                        sites_chain=(
+                                            list(one_job.get("sites_chain", []))
+                                            if isinstance(one_job.get("sites_chain"), list)
+                                            else fallback_chain
+                                        ),
                                         headless=headless,
                                         base_runtime_params=runtime_params,
                                         base_url_override=base_url_override,
@@ -1921,6 +2042,7 @@ def _run_input_timer_mode(
                                         site_error_retries=site_error_retries,
                                         defer_output_save=bool(callback_uri),
                                         selenium_remote_url=selenium_remote_url,
+                                        soft_fail_site_error_count=int(one_job.get("soft_fail_site_error_count", 0)),
                                     )
                                     processed_jobs.append({"params": dict(one_params), "records": one_records})
                                     if not ok:
