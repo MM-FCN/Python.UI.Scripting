@@ -814,12 +814,29 @@ class WorkflowCrawler:
             return
         bootstrap_open_base_url = bool(self.config.get("bootstrap_open_base_url", True))
         bootstrap_url = str(self.config.get("base_url", "")).strip() if bootstrap_open_base_url else ""
-        target_url = bootstrap_url or "about:blank"
-        try:
-            # Default behavior opens base_url directly so the first visible page is the target site.
-            self.driver.get(target_url)
-        except Exception as e:
-            print(f"[BROWSER] Bootstrap navigation skipped: target={target_url}, {type(e).__name__}: {e}")
+
+        # Only attempt bootstrap navigation when a real base_url is configured.
+        if bootstrap_open_base_url and bootstrap_url:
+            target_url = bootstrap_url
+            attempts = max(1, int(self.config.get("bootstrap_nav_attempts", 2)))
+            for attempt in range(1, attempts + 1):
+                try:
+                    # Default behavior opens base_url directly so the first visible page is the target site.
+                    self.driver.get(target_url)
+                    current_url = self._safe_current_url()
+                    if current_url and not current_url.endswith("about:blank"):
+                        print(f"[BROWSER] Bootstrap navigation success to {current_url} (attempt {attempt}/{attempts})")
+                        break
+                    else:
+                        print(f"[BROWSER] Bootstrap navigation attempt {attempt}/{attempts} result: {current_url}")
+                except Exception as e:
+                    print(f"[BROWSER] Bootstrap navigation attempt {attempt}/{attempts} failed: {type(e).__name__}: {e}")
+
+                if attempt < attempts:
+                    time.sleep(0.5)
+        else:
+            print("[BROWSER] Skipping bootstrap navigation (bootstrap_open_base_url=false or base_url empty).")
+
         self._override_navigator_webdriver()
 
     def _resolve_external_stealth_js_path(self) -> Optional[Path]:

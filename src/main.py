@@ -314,8 +314,31 @@ def run_config_batch_reuse_session(
                             except Exception:
                                 pass
 
+                    try:
+                        current_url_before_reset = crawler._safe_current_url()
+                    except Exception:
+                        current_url_before_reset = "(unavailable)"
+                    print(
+                        f"[BATCH] Current URL before reset for job {idx}: "
+                        f"{current_url_before_reset}"
+                    )
+
+                    try:
+                        crawler._navigate_to_base_url()
+                        print(
+                            f"[BATCH] Reset to base URL before job {idx}: "
+                            f"{crawler._safe_current_url()}"
+                        )
+                    except Exception as e:
+                        print(
+                            f"[BATCH] Failed to reset to base URL before job {idx}: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        raise
+
                 crawler.params = dict(one_params or {})
                 crawler.config["__deferred_output_items"] = []
+                print(f"[BATCH] Current URL at job {idx} start: {crawler._safe_current_url()}")
                 print(
                     f"[BATCH] Job {idx}/{len(params_list)} start, "
                     f"params={sorted(crawler.params.keys())}"
@@ -1351,6 +1374,17 @@ def _run_input_timer_mode(
             stem_prefix = match.group(1)
 
         folder = src.parent
+        try:
+            src_stat = src.stat()
+        except Exception:
+            src_stat = None
+        # If file is empty, avoid renaming (likely a partial/placeholder write). Update mtime and return.
+        if src_stat and src_stat.st_size == 0:
+            try:
+                os.utime(src, None)
+            except Exception:
+                pass
+            return src
         latest_mtime = 0.0
         for p in folder.glob("*.json"):
             try:
@@ -1653,6 +1687,11 @@ def _run_input_timer_mode(
                             print(f"[WATCH] Archived processed input: {archived}")
                         else:
                             renamed = rename_failed_input_for_retry(file_path)
+                            try:
+                                new_stat = renamed.stat()
+                                seen_fingerprints[str(renamed.resolve())] = (int(new_stat.st_mtime_ns), int(new_stat.st_size))
+                            except Exception:
+                                pass
                             print(f"[WATCH] Renamed failed input for retry: {renamed.name}")
                     continue
 
@@ -2175,6 +2214,11 @@ def _run_input_timer_mode(
                 elif not success and file_path.exists():
                     try:
                         renamed = rename_failed_input_for_retry(file_path)
+                        try:
+                            new_stat = renamed.stat()
+                            seen_fingerprints[str(renamed.resolve())] = (int(new_stat.st_mtime_ns), int(new_stat.st_size))
+                        except Exception:
+                            pass
                         print(f"[WATCH] Renamed failed input for retry: {renamed.name}")
                     except Exception as e:
                         # If rename fails, mark fingerprint to avoid tight-loop retries.
