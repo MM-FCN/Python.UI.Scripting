@@ -1,0 +1,171 @@
+{
+  "browser": "edge",
+  "base_url": "https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml",
+  "default_timeout": 15,
+  "download_dir": "output/enx_air/downloads",
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "enx-tracking",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 10,
+          "comment": "页面加载较慢，先固定等待"
+        },
+        {
+          "action": "select",
+          "by": "id",
+          "selector": "enxSptrctrc010:trackingItems",
+          "options": [
+            "House Air Waybill, or B/L",
+            "Purchase Order",
+            "Commercial Invoice",
+            "Customer Reference",
+            "Express Sub",
+            "Container",
+            "Delivery Slip"
+          ],
+          "text": "House Air Waybill, or B/L",
+          "timeout": 15,
+          "comment": "原生select下拉，按文本选择House Air Waybill, or B/L"
+        },
+        {
+          "action": "type",
+          "by": "name",
+          "selector": "enxSptrctrc010:j_idt24",
+          "value": "{{HAWNO}}",
+          "timeout": 20,
+          "clear_first": true
+        },
+        {
+          "action": "click",
+          "by": "id",
+          "selector": "enxSptrctrc010:searchButton",
+          "timeout": 15
+        },
+        {
+          "action": "wait",
+          "by": "xpath",
+          "selector": "//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='AWB Date']",
+          "timeout": 20,
+          "comment": "等待详情全局信息标签出现"
+        },
+        {
+          "action": "sleep",
+          "seconds": 5,
+          "comment": "标签出现后额外等待，确保全局字段文本渲染完成"
+        }
+      ],
+      "scrape": {
+        "list_by": "css",
+        "list_selector": ".air_slider .box",
+        "allow_empty": true,
+        "fields": [
+          {
+            "name": "STEP_NO",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'circle_number')]//span[1]",
+            "attr": "text"
+          },
+          {
+            "name": "STEP_TITLE_RAW",
+            "by": "xpath",
+            "selector": ".//span[contains(@class,'info_label')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "ACTUAL_CITY_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][1]//div[contains(@class,'city_air')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "ACTUAL_LINE1_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][1]//div[contains(@class,'flight_height')][1]//div[contains(@class,'flight_no_date_air')][1]",
+            "attr": "text",
+            "extract_regex": "(\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2})"
+          },
+          {
+            "name": "ACTUAL_LINE2_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][1]//div[contains(@class,'flight_height')][2]//*[contains(@class,'flight_no_date_air')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "ACTUAL_LINE3_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][1]//div[contains(@class,'flight_height')][3]//div[contains(@class,'flight_no_date_air')][1]",
+            "attr": "text",
+            "extract_regex": "(\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2})"
+          },
+          {
+            "name": "PLANNED_CITY_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][2]//div[contains(@class,'city_air')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "PLANNED_LINE1_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][2]//div[contains(@class,'flight_height')][1]//div[contains(@class,'flight_no_date_air')][1]",
+            "attr": "text",
+            "extract_regex": "(\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2})"
+          },
+          {
+            "name": "PLANNED_LINE2_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][2]//div[contains(@class,'flight_height')][2]//*[contains(@class,'flight_no_date_air')][1]",
+            "attr": "text"
+          },
+          {
+            "name": "PLANNED_LINE3_RAW",
+            "by": "xpath",
+            "selector": ".//div[contains(@class,'box_detail')][2]//div[contains(@class,'flight_height')][3]//div[contains(@class,'flight_no_date_air')][1]",
+            "attr": "text",
+            "extract_regex": "(\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2})"
+          }
+        ],
+        "global_fields": [],
+        "max_pages": 1,
+        "timeout": 20
+      },
+      "output": {
+        "format": "json",
+        "global_identifier_keys": [
+          "HAWNO"
+        ],
+        "path": "output/enx_air/enx_air_tracking.json"
+      }
+    }
+  ]
+}

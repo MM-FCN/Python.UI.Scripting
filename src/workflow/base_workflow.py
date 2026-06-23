@@ -3649,7 +3649,32 @@ class WorkflowCrawler:
             attr = field.get("attr", "text")
             try:
                 target = element.find_element(by, selector)
-                row[name] = target.text.strip() if attr == "text" else target.get_attribute(attr)
+                value = target.text.strip() if attr == "text" else target.get_attribute(attr)
+                value = "" if value is None else str(value).strip()
+
+                # Optional regex extraction for site-specific cleanup (e.g., strip status labels before datetime text).
+                extract_regex = str(field.get("extract_regex", "")).strip()
+                if extract_regex and value:
+                    try:
+                        match = re.search(extract_regex, value)
+                    except re.error:
+                        match = None
+                    if match:
+                        if match.lastindex:
+                            group_index_raw = field.get("extract_group", 1)
+                            try:
+                                group_index = int(group_index_raw)
+                            except Exception:
+                                group_index = 1
+                            if group_index < 1 or group_index > match.lastindex:
+                                group_index = 1
+                            value = match.group(group_index).strip()
+                        else:
+                            value = match.group(0).strip()
+                    else:
+                        value = ""
+
+                row[name] = value
             except NoSuchElementException:
                 row[name] = ""
         return row
