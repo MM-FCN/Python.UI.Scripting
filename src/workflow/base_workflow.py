@@ -2331,6 +2331,8 @@ class WorkflowCrawler:
 
         while time.time() < end_time:
             self._auto_check_captcha(context=context or f"wait visible: {selector}")
+            if self._is_fallback_no_data_matched():
+                raise NoDataMatchedStop("fallback.no_data matched during wait visible")
             try:
                 elements = self.driver.find_elements(by_value, selector)
                 for el in elements:
@@ -2359,6 +2361,8 @@ class WorkflowCrawler:
 
         while time.time() < end_time:
             self._auto_check_captcha(context=context or f"wait invisible: {selector}")
+            if self._is_fallback_no_data_matched():
+                raise NoDataMatchedStop("fallback.no_data matched during wait invisible")
             try:
                 elements = self.driver.find_elements(by_value, selector)
                 if not elements:

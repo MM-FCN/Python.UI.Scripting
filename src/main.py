@@ -524,8 +524,22 @@ def _push_records_to_uri(
             tagged.append(row)
         return tagged
 
+    def _collect_source_sites(source_records: list[dict[str, Any]]) -> tuple[set[str], bool]:
+        collected: set[str] = set()
+        has_source_key = False
+        for item in source_records:
+            if not isinstance(item, dict):
+                continue
+            if "source_site" in item:
+                has_source_key = True
+            raw_source = str(item.get("source_site", "")).strip().lower()
+            if raw_source:
+                collected.add(raw_source)
+        return collected, has_source_key
+
     tagged_records: list[dict[str, Any]] = []
     params_list: list[dict[str, str]] = []
+    aggregated_source_sites: set[str] = set()
     if job_results:
         for job in job_results:
             job_params = job.get("params", {})
@@ -546,10 +560,31 @@ def _push_records_to_uri(
                     if isinstance(merged_records, list):
                         callback_records = merged_records
                     break
-            params_list.append(dict(job_params))
+            job_source_sites, has_source_key = _collect_source_sites(callback_records)
+            if not job_source_sites and not has_source_key and site_name:
+                job_source_sites = {str(site_name).strip().lower()}
+            aggregated_source_sites.update(job_source_sites)
+
+            one_params = dict(job_params)
+            if len(job_source_sites) == 1 and "source_site" not in one_params:
+                one_params["source_site"] = next(iter(job_source_sites))
+            params_list.append(one_params)
             tagged_records.extend(_tag_rows(callback_records, job_params))
     else:
         tagged_records = _tag_rows(records, params)
+        inferred_sites, has_source_key = _collect_source_sites(tagged_records)
+        if not inferred_sites and not has_source_key and site_name:
+            inferred_sites = {str(site_name).strip().lower()}
+        aggregated_source_sites.update(inferred_sites)
+
+    if not aggregated_source_sites:
+        tagged_sites, has_source_key = _collect_source_sites(tagged_records)
+        if tagged_sites:
+            aggregated_source_sites.update(tagged_sites)
+        elif not has_source_key and site_name:
+            aggregated_source_sites.add(str(site_name).strip().lower())
+
+    source_sites = sorted(aggregated_source_sites)
 
     payload = {
         "site": site_name,
@@ -561,6 +596,10 @@ def _push_records_to_uri(
         "records": tagged_records,
         "pushed_at": datetime.now().isoformat(timespec="seconds"),
     }
+    if source_sites:
+        payload["source_sites"] = source_sites
+        if len(source_sites) == 1:
+            payload["source_site"] = source_sites[0]
 
     max_attempts = max(1, int(retries) + 1)
     timeout = max(1, int(timeout_seconds))
