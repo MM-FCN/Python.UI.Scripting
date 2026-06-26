@@ -10,7 +10,7 @@ import subprocess
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -176,6 +176,38 @@ def _read_watch_db_size_settings(global_cfg: dict[str, Any]) -> dict[str, int]:
         "max_size_mb": max_size_mb,
         "max_size_bytes": max_size_mb * 1024 * 1024,
     }
+
+
+def _extract_timestamped_stem_prefix(stem: str) -> str:
+    input_anchor = "_input"
+    anchor_idx = stem.find(input_anchor)
+    if anchor_idx >= 0:
+        return stem[: anchor_idx + len(input_anchor)]
+
+    match = re.match(r"^(.*)_\d{8}(?:_\d{6}(?:_\d{6})?)$", stem)
+    if match:
+        return match.group(1).rstrip("_")
+    return stem.rstrip("_")
+
+
+def _extract_stem_timestamp(stem: str) -> Optional[datetime]:
+    match = re.match(r"^.*_(\d{8})_(\d{6})(?:_(\d{6}))?$", stem)
+    if not match:
+        return None
+
+    date_part = match.group(1)
+    time_part = match.group(2)
+    micro_part = match.group(3)
+    fmt = "%Y%m%d_%H%M%S"
+    value = f"{date_part}_{time_part}"
+    if micro_part:
+        fmt = "%Y%m%d_%H%M%S_%f"
+        value = f"{value}_{micro_part}"
+
+    try:
+        return datetime.strptime(value, fmt)
+    except ValueError:
+        return None
 
 
 def _resolve_selenium_remote_url(global_cfg: dict[str, Any]) -> str:
@@ -1469,10 +1501,7 @@ def _run_input_timer_mode(
         site_done_dir = done_root / site_name
         site_done_dir.mkdir(parents=True, exist_ok=True)
         # Extract base name before the date pattern, e.g., cargo_input from cargo_input_20260625_111601
-        stem_prefix = src.stem
-        match = re.match(r"^(.*)_\d{8}(?:_\d{6}(?:_\d{6})?)$", src.stem)
-        if match:
-            stem_prefix = match.group(1)
+        stem_prefix = _extract_timestamped_stem_prefix(src.stem)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = site_done_dir / f"{stem_prefix}_{ts}{src.suffix}"
         try:
@@ -1485,11 +1514,7 @@ def _run_input_timer_mode(
         return dst
 
     def rename_failed_input_for_retry(src: Path) -> Path:
-        # Keep filename sortable by time so latest retries are at the end of folder listing.
-        stem_prefix = src.stem
-        match = re.match(r"^(.*)_\d{8}(?:_\d{6}(?:_\d{6})?)$", src.stem)
-        if match:
-            stem_prefix = match.group(1)
+        stem_prefix = _extract_timestamped_stem_prefix(src.stem)
 
         folder = src.parent
         try:
@@ -1503,18 +1528,23 @@ def _run_input_timer_mode(
             except Exception:
                 pass
             return src
-        latest_mtime = 0.0
+        latest_dt: Optional[datetime] = None
         for p in folder.glob("*.json"):
+            parsed_dt = _extract_stem_timestamp(p.stem)
+            if parsed_dt is not None:
+                if latest_dt is None or parsed_dt > latest_dt:
+                    latest_dt = parsed_dt
+                continue
             try:
-                latest_mtime = max(latest_mtime, p.stat().st_mtime)
+                fallback_dt = datetime.fromtimestamp(p.stat().st_mtime)
             except Exception:
                 continue
+            if latest_dt is None or fallback_dt > latest_dt:
+                latest_dt = fallback_dt
 
         candidate_dt = datetime.now()
-        if latest_mtime > 0:
-            latest_dt = datetime.fromtimestamp(latest_mtime)
-            if latest_dt >= candidate_dt:
-                candidate_dt = latest_dt
+        if latest_dt is not None and latest_dt >= candidate_dt:
+            candidate_dt = latest_dt + timedelta(microseconds=1)
 
         while True:
             ts = candidate_dt.strftime("%Y%m%d_%H%M%S_%f")
@@ -1522,7 +1552,7 @@ def _run_input_timer_mode(
             if not dst.exists():
                 src.replace(dst)
                 return dst
-            candidate_dt = datetime.fromtimestamp(candidate_dt.timestamp() + 1)
+            candidate_dt = candidate_dt + timedelta(microseconds=1)
 
     while True:
         try:

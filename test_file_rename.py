@@ -8,7 +8,7 @@
 import re
 import tempfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 import os
 
@@ -18,10 +18,32 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 def extract_stem_prefix(stem: str) -> str:
     """提取基础名称前缀（去掉日期时间戳）"""
+    input_anchor = "_input"
+    anchor_idx = stem.find(input_anchor)
+    if anchor_idx >= 0:
+        return stem[: anchor_idx + len(input_anchor)]
+
     match = re.match(r"^(.*)_\d{8}(?:_\d{6}(?:_\d{6})?)$", stem)
     if match:
-        return match.group(1)
-    return stem
+        return match.group(1).rstrip("_")
+    return stem.rstrip("_")
+
+
+def extract_stem_timestamp(stem: str):
+    """从文件名中提取时间戳，优先使用微秒精度"""
+    match = re.match(r"^.*_(\d{8})_(\d{6})(?:_(\d{6}))?$", stem)
+    if not match:
+        return None
+
+    date_part = match.group(1)
+    time_part = match.group(2)
+    micro_part = match.group(3)
+    fmt = "%Y%m%d_%H%M%S"
+    value = f"{date_part}_{time_part}"
+    if micro_part:
+        fmt = "%Y%m%d_%H%M%S_%f"
+        value = f"{value}_{micro_part}"
+    return datetime.strptime(value, fmt)
 
 
 def test_stem_extraction():
@@ -32,6 +54,7 @@ def test_stem_extraction():
         ("enx_tracking_20260625_172630", "enx_tracking"),
         ("simple_name", "simple_name"),  # 无日期时间戳的名称
         ("cma_input_20260603_090753_662041", "cma_input"),
+        ("maersk_input__20260605_151926_503241", "maersk_input"),
     ]
     
     print("=" * 70)
@@ -81,8 +104,9 @@ def test_archive_input_file_naming():
             
             # 检查是否仅有一个日期时间戳
             date_count = len(re.findall(r"_\d{8}_\d{6}", new_filename))
-            status = "✓ PASS" if date_count == 1 else "✗ FAIL"
-            print(f"{status} | 日期时间戳数量: {date_count}\n")
+            normalized_prefix_ok = "__" not in new_filename.split("_20", 1)[0]
+            status = "✓ PASS" if date_count == 1 and normalized_prefix_ok else "✗ FAIL"
+            print(f"{status} | 日期时间戳数量: {date_count} | 前缀规范化: {'yes' if normalized_prefix_ok else 'no'}\n")
     print()
 
 
@@ -152,6 +176,48 @@ def test_renaming_scenarios():
     print()
 
 
+def test_failed_file_moves_to_batch_end():
+    """测试失败文件会被重命名到当前批次的最后"""
+    print("=" * 70)
+    print("测试5：失败文件移动到批次末尾")
+    print("=" * 70)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        older = tmpdir / "cargo_input_20260626_122056_458124.json"
+        latest = tmpdir / "cargo_input_20260626_122625_855747.json"
+        failed = tmpdir / "cargo_input_20260626_122201_540543.json"
+
+        for path in (older, latest, failed):
+            path.write_text("{}", encoding="utf-8")
+
+        os.utime(older, (datetime(2026, 6, 26, 12, 20, 56).timestamp(),) * 2)
+        os.utime(latest, (datetime(2026, 6, 26, 12, 26, 25).timestamp(),) * 2)
+        os.utime(failed, (datetime(2026, 6, 26, 12, 22, 1).timestamp(),) * 2)
+
+        stem_prefix = extract_stem_prefix(failed.stem)
+        latest_dt = None
+        for path in tmpdir.glob("*.json"):
+            parsed_dt = extract_stem_timestamp(path.stem)
+            if parsed_dt is None:
+                parsed_dt = datetime.fromtimestamp(path.stat().st_mtime)
+            if latest_dt is None or parsed_dt > latest_dt:
+                latest_dt = parsed_dt
+
+        candidate_dt = latest_dt + timedelta(microseconds=1)
+        ts = candidate_dt.strftime("%Y%m%d_%H%M%S_%f")
+        new_filename = f"{stem_prefix}_{ts}{failed.suffix}"
+
+        print(f"最新文件: {latest.name}")
+        print(f"失败文件: {failed.name}")
+        print(f"新文件名: {new_filename}")
+
+        moved_to_end = new_filename > latest.name
+        status = "✓ PASS" if moved_to_end else "✗ FAIL"
+        print(f"{status} | 失败文件会排到当前批次最后\n")
+
+
 def main():
     print("\n" + "="*70)
     print("文件重命名逻辑修复 - 单元测试")
@@ -161,6 +227,7 @@ def main():
     test_archive_input_file_naming()
     test_append_timestamp_to_path()
     test_renaming_scenarios()
+    test_failed_file_moves_to_batch_end()
     
     print("="*70)
     print("所有测试完成！")

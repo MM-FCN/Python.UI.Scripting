@@ -75,9 +75,9 @@
         {
           "action": "wait",
           "by": "xpath",
-          "selector": "//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='AWB Date']",
+          "selector": "//div[contains(@class,'air_info1')]//span[contains(@class,'info_label') and normalize-space()='AWB Date'] | //*[@id='enxSptrctrc010:output_message'] | //div[contains(@class,'tracking_err')] | //div[contains(@class,'tracking_err')]//*[contains(@class,'error_txt')]",
           "timeout": 20,
-          "comment": "等待详情全局信息标签出现"
+          "comment": "等待详情标签或无数据提示出现，避免无数据时超时"
         },
         {
           "action": "sleep",
@@ -89,6 +89,11 @@
         "list_by": "css",
         "list_selector": ".air_slider .box",
         "allow_empty": true,
+        "no_data_selectors": [
+          ".tracking_err",
+          ".tracking_err .error_txt",
+          "#enxSptrctrc010\\:output_message"
+        ],
         "fields": [
           {
             "name": "STEP_NO",
