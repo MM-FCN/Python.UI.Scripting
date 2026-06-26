@@ -1468,8 +1468,13 @@ def _run_input_timer_mode(
     def archive_input_file(src: Path, site_name: str) -> Path:
         site_done_dir = done_root / site_name
         site_done_dir.mkdir(parents=True, exist_ok=True)
+        # Extract base name before the date pattern, e.g., cargo_input from cargo_input_20260625_111601
+        stem_prefix = src.stem
+        match = re.match(r"^(.*)_\d{8}(?:_\d{6}(?:_\d{6})?)$", src.stem)
+        if match:
+            stem_prefix = match.group(1)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dst = site_done_dir / f"{src.stem}_{ts}{src.suffix}"
+        dst = site_done_dir / f"{stem_prefix}_{ts}{src.suffix}"
         try:
             src.replace(dst)
         except OSError as e:

@@ -3767,8 +3767,13 @@ class WorkflowCrawler:
 
     def _append_timestamp_to_path(self, path: Path) -> Path:
         """Append a timestamp so each JSON run writes to a unique file."""
+        # Extract base name before the date pattern to replace timestamp instead of appending
+        stem_prefix = path.stem
+        match = re.match(r"^(.*)_\d{8}(?:_\d{6}(?:_\d{6})?)$", path.stem)
+        if match:
+            stem_prefix = match.group(1)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        return path.with_name(f"{path.stem}_{ts}{path.suffix}")
+        return path.with_name(f"{stem_prefix}_{ts}{path.suffix}")
 
     def _build_globals_plus_records_payload(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Promote global values to top-level and keep detail rows under records."""
