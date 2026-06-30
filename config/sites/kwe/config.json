@@ -1,0 +1,134 @@
+{
+  "browser": "edge",
+  "base_url": "https://www.cssplus.kwe.com/",
+  "default_timeout": 15,
+  "download_dir": "output/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Status",
+        "StatusDate"
+      ],
+      "text_contains": [
+        "no data",
+        "no result",
+        "not found",
+        "no records found"
+      ],
+      "message_selector": "div.custom-scrollbar.msg-content"
+    }
+  },
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "kwe_transport_information",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 5,
+          "comment": "页面加载较慢，先固定等待5秒"
+        },
+        {
+          "action": "type",
+          "by": "css",
+          "selector": "input.shipment-trace-input",
+          "value": "{{ContainerNo}}",
+          "timeout": 60,
+          "comment": "输入MAWB单号"
+        },
+        {
+          "action": "click",
+          "by": "css",
+          "selector": "button.btn.btn-primary.shipment-trace-button.shipment-search-icon",
+          "timeout": 15
+        },
+        {
+          "action": "wait",
+          "by": "css",
+          "selector": "div.shipment-info-header span.shipment-info-item-value:not(:empty)",
+          "timeout": 60,
+          "comment": "等待查询结果值加载完成（至少一个非空值）"
+        }
+      ],
+      "scrape": {
+        "allow_empty": true,
+        "fields": [
+          {
+            "name": "Depart",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'shipment-info-left')]//div[contains(@class,'shipment-info-wrapper')][.//span[contains(normalize-space(),'Depart')]]//span[contains(@class,'shipment-info-item-value')]",
+            "attr": "text"
+          },
+          {
+            "name": "ETD",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'shipment-info-left')]//div[contains(@class,'shipment-info-wrapper')][.//span[contains(normalize-space(),'ETD')]]//span[contains(@class,'shipment-info-item-value')]",
+            "attr": "text"
+          },
+          {
+            "name": "ATD",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'shipment-info-left')]//div[contains(@class,'shipment-info-wrapper')][.//span[contains(normalize-space(),'ATD')]]//span[contains(@class,'shipment-info-item-value')]",
+            "attr": "text"
+          },
+          {
+            "name": "RouteStatus",
+            "by": "css",
+            "selector": "div.shipment-info-header .shipment-info-middle .shipment-info-middle-header",
+            "attr": "text"
+          },
+          {
+            "name": "Arrive",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'shipment-info-right')]//div[contains(@class,'shipment-info-wrapper')][.//span[contains(normalize-space(),'Arrive')]]//span[contains(@class,'shipment-info-item-value')]",
+            "attr": "text"
+          },
+          {
+            "name": "ETA",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'shipment-info-right')]//div[contains(@class,'shipment-info-wrapper')][.//span[contains(normalize-space(),'ETA')]]//span[contains(@class,'shipment-info-item-value')]",
+            "attr": "text"
+          },
+          {
+            "name": "ATA",
+            "by": "xpath",
+            "selector": "//div[contains(@class,'shipment-info-right')]//div[contains(@class,'shipment-info-wrapper')][.//span[contains(normalize-space(),'ATA')]]//span[contains(@class,'shipment-info-item-value')]",
+            "attr": "text"
+          }
+        ]
+      },
+      "output": {
+        "format": "json",
+        "path": "output/kwe/kwe_tracking.json"
+      }
+    }
+  ]
+}

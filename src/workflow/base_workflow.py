@@ -2297,7 +2297,25 @@ class WorkflowCrawler:
         elif isinstance(raw_text_contains, list):
             text_needles = [str(s).strip().lower() for s in raw_text_contains if str(s).strip()]
 
-        if not text_needles:
+        message_selector = str(no_data_cfg.get("message_selector", "")).strip()
+        no_data_message = ""
+        if message_selector:
+            try:
+                msg_elements = self.driver.find_elements(By.CSS_SELECTOR, message_selector)
+                for el in msg_elements:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                    except Exception:
+                        continue
+                    text = (el.text or "").strip()
+                    if text:
+                        no_data_message = text
+                        break
+            except Exception:
+                no_data_message = ""
+
+        if not text_needles and not no_data_message:
             return False
 
         page_text = ""
@@ -2306,13 +2324,20 @@ class WorkflowCrawler:
         except Exception:
             page_text = ""
 
-        if not page_text.strip():
-            return False
-
         for needle in text_needles:
             if needle and needle in page_text:
+                if no_data_message:
+                    print(f"[FALLBACK] no_data message: {no_data_message}")
                 print(f"[FALLBACK] no_data matched by text: {needle}")
                 return True
+
+        if no_data_message:
+            no_data_message_lower = no_data_message.lower()
+            for needle in text_needles:
+                if needle and needle in no_data_message_lower:
+                    print(f"[FALLBACK] no_data message: {no_data_message}")
+                    print(f"[FALLBACK] no_data matched by message text: {needle}")
+                    return True
 
         return False
 
