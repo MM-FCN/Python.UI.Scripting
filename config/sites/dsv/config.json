@@ -1,0 +1,165 @@
+{
+  "browser": "edge",
+  "base_url": "https://mydsv.dsv.com/app/tracking-public/?language_region=en-US_US",
+  "default_timeout": 15,
+  "download_dir": "output/downloads",
+  "fallback": {
+    "no_data": {
+      "require_any_fields": [
+        "Status",
+        "StatusDate"
+      ],
+      "text_contains": [
+        "no data",
+        "no result",
+        "not found",
+        "no records found",
+        "shipment not found"
+      ],
+      "message_selector": "h5.error, div.custom-scrollbar.msg-content"
+    }
+  },
+  "log": {
+    "retention_days": 30
+  },
+  "login": {
+    "enabled": false,
+    "url": "",
+    "fields": [
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      },
+      {
+        "by": "css",
+        "selector": "",
+        "value": ""
+      }
+    ],
+    "submit": {
+      "by": "xpath",
+      "selector": ""
+    },
+    "wait_success": {
+      "type": "",
+      "by": "xpath",
+      "selector": "",
+      "timeout": 20
+    }
+  },
+  "tasks": [
+    {
+      "name": "dsv_transport_information",
+      "navigation_steps": [
+        {
+          "action": "sleep",
+          "seconds": 3,
+          "comment": "页面加载较慢，先固定等待3秒"
+        },
+        {
+          "action": "click_if_exists",
+          "by": "css",
+          "selector": "button.coi-banner__accept[aria-label='OK']",
+          "timeout": 8,
+          "comment": "如出现Cookie弹窗则点击允许全部"
+        },
+        {
+          "action": "type",
+          "by": "xpath",
+          "selector": "//mat-form-field[.//mat-label[contains(normalize-space(),'Reference Number')]]//input[@type='text']",
+          "value": "{{ContainerNo}}",
+          "timeout": 60,
+          "comment": "输入Reference Number"
+        },
+        {
+          "action": "click",
+          "by": "css",
+          "selector": "button#checkboxRefType-button",
+          "timeout": 10,
+          "comment": "切换Reference类型开关"
+        },
+        {
+          "action": "sleep",
+          "seconds": 1,
+          "comment": "等待toggle触发后下拉框渲染"
+        },
+        {
+          "action": "click",
+          "by": "xpath",
+          "selector": "//mat-select[.//span[contains(@class,'mat-mdc-select-placeholder') and contains(normalize-space(),'Select Reference Type')]]",
+          "timeout": 10,
+          "comment": "点击打开 Select Reference Type 下拉框"
+        },
+        {
+          "action": "click",
+          "by": "xpath",
+          "selector": "//mat-option[.//div[normalize-space()='House Air Waybill']]",
+          "timeout": 10,
+          "comment": "选择 House Air Waybill 选项"
+        },
+        {
+          "action": "click",
+          "by": "xpath",
+          "selector": "//button[.//span[contains(@class,'mdc-button__label') and contains(normalize-space(),'Search')]]",
+          "timeout": 15
+        },
+        {
+          "action": "wait_url_contains",
+          "value": "refNumber=",
+          "timeout": 60,
+          "comment": "等待跳转到结果页（URL 包含 refNumber=）"
+        },
+        {
+          "action": "click",
+          "by": "xpath",
+          "selector": "//mat-expansion-panel-header[.//mat-panel-title[normalize-space()='Shipment Status History']]",
+          "timeout": 15,
+          "comment": "展开 Shipment Status History 面板"
+        },
+        {
+          "action": "wait",
+          "by": "css",
+          "selector": "es-status-history table.pt-table tbody tr",
+          "timeout": 15,
+          "comment": "等待状态历史表格行渲染完成"
+        }
+      ],
+      "scrape": {
+        "allow_empty": true,
+        "list_by": "css",
+        "list_selector": "es-status-history table.pt-table tbody tr",
+        "fields": [
+          {
+            "name": "Event",
+            "by": "css",
+            "selector": "td[data-label='Event']",
+            "attr": "text"
+          },
+          {
+            "name": "Date",
+            "by": "css",
+            "selector": "td[data-label='Date']",
+            "attr": "text"
+          },
+          {
+            "name": "Location",
+            "by": "css",
+            "selector": "td[data-label='Location']",
+            "attr": "text"
+          },
+          {
+            "name": "Comments",
+            "by": "css",
+            "selector": "td[data-label='Comments']",
+            "attr": "text"
+          }
+        ]
+      },
+      "output": {
+        "format": "json",
+        "path": "output/dsv/dsv_tracking.json"
+      }
+    }
+  ]
+}
