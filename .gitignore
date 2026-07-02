@@ -1,9 +1,11 @@
 __pycache__/
 *.pyc
 .env
+input/
 output/
 input_done/
 log/
 .vscode/
 .edge-debug-profile/
 /.vs
+state/
