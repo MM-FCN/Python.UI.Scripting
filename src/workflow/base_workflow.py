@@ -3229,6 +3229,8 @@ class WorkflowCrawler:
                 self._scrape_popup_data()
             else:
                 raise ValueError(f"Unsupported action: {action}")
+        except NoDataMatchedStop:
+            raise
         except Exception:
             print(
                 f"[ERROR] Action failed: action={action}, by={step.get('by')}, "
