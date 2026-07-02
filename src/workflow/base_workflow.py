@@ -2416,6 +2416,8 @@ class WorkflowCrawler:
 
         while time.time() < end_time:
             self._auto_check_captcha(context=context or f"wait url contains: {marker}")
+            if self._is_fallback_no_data_matched():
+                raise NoDataMatchedStop("fallback.no_data matched during wait_url_contains")
             try:
                 current_url = self._safe_current_url()
                 if marker in current_url:

@@ -74,32 +74,6 @@
         },
         {
           "action": "click",
-          "by": "css",
-          "selector": "button#checkboxRefType-button",
-          "timeout": 10,
-          "comment": "切换Reference类型开关"
-        },
-        {
-          "action": "sleep",
-          "seconds": 1,
-          "comment": "等待toggle触发后下拉框渲染"
-        },
-        {
-          "action": "click",
-          "by": "xpath",
-          "selector": "//mat-select[.//span[contains(@class,'mat-mdc-select-placeholder') and contains(normalize-space(),'Select Reference Type')]]",
-          "timeout": 10,
-          "comment": "点击打开 Select Reference Type 下拉框"
-        },
-        {
-          "action": "click",
-          "by": "xpath",
-          "selector": "//mat-option[.//div[normalize-space()='House Air Waybill']]",
-          "timeout": 10,
-          "comment": "选择 House Air Waybill 选项"
-        },
-        {
-          "action": "click",
           "by": "xpath",
           "selector": "//button[.//span[contains(@class,'mdc-button__label') and contains(normalize-space(),'Search')]]",
           "timeout": 15
@@ -162,4 +136,4 @@
       }
     }
   ]
-}
+}       
