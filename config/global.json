@@ -1,5 +1,5 @@
 {
-  "selenium_remote_url": "http://szh2vm0372.apac.bosch.com:4444/wd/hub",
+  "selenium_remote_url": "http://rbjp-hikari-selenium-edge:4444/wd/hub",
   "watch": {
     "_descriptions": {
       "log": "运行日志总配置对象。",

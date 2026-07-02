@@ -14,6 +14,8 @@ from typing import TextIO
 DEFAULT_MAX_LOG_BYTES = 80 * 1024 * 1024
 DEFAULT_LOG_RETENTION_DAYS = 7
 DEFAULT_LOG_CLEANUP_INTERVAL_SECONDS = 60 * 60
+TAG_LINE_PATTERN = re.compile(r"^\[[^\]\r\n]+\]")
+TIMESTAMP_FORMAT = "%Y/%m/%d %H:%M:%S"
 
 
 class TeeStream(io.TextIOBase):
@@ -22,15 +24,48 @@ class TeeStream(io.TextIOBase):
     def __init__(self, console: TextIO, log_file: TextIO) -> None:
         self._console = console
         self._log_file = log_file
+        self._pending = ""
 
     def write(self, s: str) -> int:
-        self._console.write(s)
-        self._log_file.write(s)
+        text = self._consume_text(s)
+        if text:
+            self._console.write(text)
+            self._log_file.write(text)
         return len(s)
 
     def flush(self) -> None:
+        remaining = self._flush_pending()
+        if remaining:
+            self._console.write(remaining)
+            self._log_file.write(remaining)
         self._console.flush()
         self._log_file.flush()
+
+    def _consume_text(self, s: str) -> str:
+        if not s:
+            return ""
+
+        self._pending += s
+        lines = self._pending.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            self._pending = lines.pop()
+        else:
+            self._pending = ""
+
+        return "".join(self._format_one_line(line) for line in lines)
+
+    def _flush_pending(self) -> str:
+        if not self._pending:
+            return ""
+        pending = self._pending
+        self._pending = ""
+        return self._format_one_line(pending)
+
+    def _format_one_line(self, line: str) -> str:
+        if TAG_LINE_PATTERN.match(line):
+            timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
+            return f"{timestamp} {line}"
+        return line
 
 
 class BoundedDailyLogFile(io.TextIOBase):

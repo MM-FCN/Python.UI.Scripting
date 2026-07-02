@@ -8,4 +8,5 @@ log/
 .vscode/
 .edge-debug-profile/
 /.vs
+openspec/
 state/
