@@ -93,7 +93,8 @@
       ],
       "scrape": {
         "list_by": "xpath",
-        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[normalize-space()='Origin'] and .//thead//div[normalize-space()='Destination']]//tbody/tr",
+        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//*[contains(normalize-space(),'Origin')] and .//thead//*[contains(normalize-space(),'Destination')]]//tbody/tr",
+        "timeout": 35,
         "allow_empty": true,
         "no_data_selectors": [
           ".input .icon.red.emphasis",
@@ -150,7 +151,8 @@
       "navigation_steps": [],
       "scrape": {
         "list_by": "xpath",
-        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[normalize-space()='Vessel / Voyage'] and .//thead//div[normalize-space()='Arrival']]//tbody/tr",
+        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//*[contains(normalize-space(),'Vessel') and contains(normalize-space(),'Voyage')] and .//thead//*[contains(normalize-space(),'Arrival')]]//tbody/tr",
+        "timeout": 35,
         "allow_empty": true,
         "no_data_selectors": [
           ".input .icon.red.emphasis",
