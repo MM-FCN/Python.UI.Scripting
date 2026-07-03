@@ -75,6 +75,17 @@
           "comment": "页面加载较慢，先固定等待"
         },
         {
+          "action": "click_if_exists",
+          "by": "xpath",
+          "selector": "//button[normalize-space()='I Agree' or contains(@onclick,'agreeAllCookies') or contains(normalize-space(.),'I Agree') ]",
+          "timeout": 6,
+          "max_rounds": 2,
+          "post_click_invisible_by": "xpath",
+          "post_click_invisible_selector": "//div[contains(@class,'popup-wrap') and contains(@class,'large')][contains(@style,'display:none') or not(normalize-space())]",
+          "post_click_invisible_timeout": 3,
+          "comment": "第2步：若出现 Cookie 弹窗，点击 I Agree（可选步骤）"
+        },
+        {
           "action": "type",
           "by": "css",
           "selector": "input[name='srchCntrNo1']",
@@ -93,7 +104,7 @@
       ],
       "scrape": {
         "list_by": "xpath",
-        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//*[contains(normalize-space(),'Origin')] and .//thead//*[contains(normalize-space(),'Destination')]]//tbody/tr",
+        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[contains(normalize-space(),'Origin')] and .//thead//div[contains(normalize-space(),'Destination')]]//tbody/tr",
         "timeout": 35,
         "allow_empty": true,
         "no_data_selectors": [
@@ -103,38 +114,38 @@
         "fields": [
           {
             "name": "RowType",
-            "by": "css",
-            "selector": "th .text",
+            "by": "xpath",
+            "selector": "./th//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "Origin",
-            "by": "css",
-            "selector": "td:nth-child(2) .text",
+            "by": "xpath",
+            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Origin'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Origin']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "LoadingPort",
-            "by": "css",
-            "selector": "td:nth-child(3) .text",
+            "by": "xpath",
+            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Loading Port'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Loading Port']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "TSPort",
-            "by": "css",
-            "selector": "td:nth-child(4) .text",
+            "by": "xpath",
+            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='T/S Port' or normalize-space(.//div)='T/S' or normalize-space(.//div)='TS' or normalize-space(.//div)='TSPort'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='T/S Port' or normalize-space(.//div)='T/S' or normalize-space(.//div)='TS' or normalize-space(.//div)='TSPort']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "DischargingPort",
-            "by": "css",
-            "selector": "td:nth-child(5) .text",
+            "by": "xpath",
+            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Discharging Port'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Discharging Port']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "Destination",
-            "by": "css",
-            "selector": "td:nth-child(6) .text",
+            "by": "xpath",
+            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Destination'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Destination']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
             "attr": "text"
           }
         ],
@@ -151,7 +162,7 @@
       "navigation_steps": [],
       "scrape": {
         "list_by": "xpath",
-        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//*[contains(normalize-space(),'Vessel') and contains(normalize-space(),'Voyage')] and .//thead//*[contains(normalize-space(),'Arrival')]]//tbody/tr",
+        "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[contains(normalize-space(),'Vessel') and contains(normalize-space(),'Voyage')] and .//thead//div[contains(normalize-space(),'Arrival')]]//tbody/tr",
         "timeout": 35,
         "allow_empty": true,
         "no_data_selectors": [
