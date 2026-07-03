@@ -121,31 +121,31 @@
           {
             "name": "Origin",
             "by": "xpath",
-            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Origin'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Origin']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
+            "selector": "./td[position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Origin']/preceding-sibling::th) and count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Origin'])>0]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "LoadingPort",
             "by": "xpath",
-            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Loading Port'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Loading Port']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
+            "selector": "./td[position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Loading Port']/preceding-sibling::th) and count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Loading Port'])>0]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "TSPort",
             "by": "xpath",
-            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='T/S Port' or normalize-space(.//div)='T/S' or normalize-space(.//div)='TS' or normalize-space(.//div)='TSPort'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='T/S Port' or normalize-space(.//div)='T/S' or normalize-space(.//div)='TS' or normalize-space(.//div)='TSPort']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
+            "selector": "./td[position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='T/S Port' or normalize-space(.//div)='T/S' or normalize-space(.//div)='TS' or normalize-space(.//div)='TSPort']/preceding-sibling::th) and count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='T/S Port' or normalize-space(.//div)='T/S' or normalize-space(.//div)='TS' or normalize-space(.//div)='TSPort'])>0]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "DischargingPort",
             "by": "xpath",
-            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Discharging Port'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Discharging Port']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
+            "selector": "./td[position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Discharging Port']/preceding-sibling::th) and count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Discharging Port'])>0]//div[contains(@class,'text')]",
             "attr": "text"
           },
           {
             "name": "Destination",
             "by": "xpath",
-            "selector": "./td[count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Destination'])>0 and position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Destination']/preceding-sibling::th)+1]//div[contains(@class,'text')]",
+            "selector": "./td[position()=count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Destination']/preceding-sibling::th) and count(ancestor::div[contains(@class,'table-wrap')]//thead//th[normalize-space(.//div)='Destination'])>0]//div[contains(@class,'text')]",
             "attr": "text"
           }
         ],
