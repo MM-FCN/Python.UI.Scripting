@@ -3550,11 +3550,12 @@ class WorkflowCrawler:
         row_by: str,
         row_selector: str,
         timeout: int,
-        stable_checks: int = 3,
+        stable_checks: int = 2,
         poll: float = 0.4,
     ) -> bool:
         """等待表格行数连续稳定若干次，作为数据渲染完成信号。"""
-        end_time = time.time() + timeout
+        start_time = time.time()
+        end_time = start_time + timeout
         last_count = -1
         stable_count = 0
         print(
@@ -3571,12 +3572,14 @@ class WorkflowCrawler:
                 last_count = count
 
             if count > 0 and stable_count >= stable_checks:
-                print(f"[SCRAPE] Rows stabilized at {count} rows")
+                elapsed = time.time() - start_time
+                print(f"[SCRAPE] Rows stabilized at {count} rows (stable_checks={stable_checks}) in {elapsed:.2f}s")
                 return True
 
             time.sleep(poll)
 
-        print(f"[SCRAPE] Rows stability timeout, last_count={last_count}")
+        elapsed = time.time() - start_time
+        print(f"[SCRAPE] Rows stability timeout after {elapsed:.2f}s, last_count={last_count}")
         return False
 
     def _scrape_records(self) -> List[Dict[str, Any]]:
@@ -3614,6 +3617,7 @@ class WorkflowCrawler:
             )
 
         for page in range(1, max_pages + 1):
+            page_start_time = time.time()
             try:
                 self._wait_visible(scrape_cfg["list_by"], list_selector, timeout=scrape_cfg.get("timeout"))
             except TimeoutException:
@@ -3653,14 +3657,35 @@ class WorkflowCrawler:
                     return all_records
                 raise
             items = self.driver.find_elements(self._to_by(scrape_cfg["list_by"]), list_selector)
+            extract_time_total = 0.0
             global_row = self._extract_fields_from_element(self.driver, global_fields) if global_fields else {}
             print(f"[INFO] Page {page}, found {len(items)} items")
 
-            for item in items:
-                row = self._extract_fields_from_element(item, fields)
-                if global_row:
-                    row.update(global_row)
-                all_records.append(row)
+            # Fast JS batch extract to avoid per-cell WebDriver calls when configured.
+            use_fast = bool(scrape_cfg.get("fast_extract_enabled", True))
+            threshold = int(scrape_cfg.get("fast_extract_threshold", 8) or 8)
+            list_by = str(scrape_cfg.get("list_by", "css")).lower()
+
+            if use_fast and list_by == "css" and len(items) >= threshold:
+                t0 = time.time()
+                rows = self._fast_extract(list_selector, fields)
+                extract_time_total = time.time() - t0
+                for row in rows:
+                    if global_row:
+                        row.update(global_row)
+                    all_records.append(row)
+            else:
+                for item in items:
+                    t0 = time.time()
+                    row = self._extract_fields_from_element(item, fields)
+                    extract_time_total += (time.time() - t0)
+                    if global_row:
+                        row.update(global_row)
+                    all_records.append(row)
+
+            page_elapsed = time.time() - page_start_time
+            avg_extract = (extract_time_total / len(items)) if items else 0.0
+            print(f"[INFO] Page {page} timing: page_elapsed={page_elapsed:.2f}s, extract_total={extract_time_total:.2f}s, avg_per_item={avg_extract:.3f}s")
 
             if not next_page:
                 break
@@ -3711,6 +3736,55 @@ class WorkflowCrawler:
             except NoSuchElementException:
                 row[name] = ""
         return row
+
+    def _fast_extract(self, list_selector: str, fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use a single execute_script call to extract all rows/fields in-page.
+
+        This avoids repeated WebDriver round-trips for each cell.
+        Only supports CSS `list_selector` and CSS-relative `field['selector']`.
+        """
+        if not self.driver:
+            return []
+
+        try:
+            script = (
+                "(function(sel, fields){"
+                "  try{"
+                "    var rows = document.querySelectorAll(sel);"
+                "    return Array.prototype.map.call(rows, function(tr){"
+                "      var obj = {};"
+                "      fields.forEach(function(field){"
+                "        var name = field && field.name ? field.name : '';"
+                "        var selector = field && field.selector ? field.selector : '';"
+                "        var attr = field && field.attr ? field.attr : 'text';"
+                "        var val = '';"
+                "        try{"
+                "          if(selector){"
+                "            var el = tr.querySelector(selector);"
+                "            if(el){ val = (attr === 'text') ? (el.innerText || '') : (el.getAttribute(attr) || ''); }"
+                "          } else { val = tr.innerText || ''; }"
+                "        }catch(e){ val = ''; }"
+                "        obj[name] = (val === null || val === undefined) ? '' : String(val).trim();"
+                "      });"
+                "      return obj;"
+                "    });"
+                "  }catch(e){ return []; }"
+                "})(arguments[0], arguments[1]);"
+            )
+
+            result = self.driver.execute_script(script, list_selector, fields or [])
+            if not isinstance(result, list):
+                return []
+            # Ensure all values are strings
+            cleaned: List[Dict[str, Any]] = []
+            for r in result:
+                if not isinstance(r, dict):
+                    continue
+                cleaned.append({k: ('' if v is None else str(v).strip()) for k, v in r.items()})
+            return cleaned
+        except Exception as e:
+            print(f"[FAST_EXTRACT] JS extract failed: {type(e).__name__}: {e}")
+            return []
 
     def _click_next_page(self, next_page: Dict[str, Any]) -> bool:
         try:
