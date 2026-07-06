@@ -31,4 +31,4 @@ COPY src ./src
 COPY config ./config
 COPY input ./input
 
-CMD ["python", "-m", "src.main", "--watch-input", "--selenium-remote-url"]
+CMD ["python", "-m", "src.main", "--watch-input", "--headless", "--selenium-remote-url"]
