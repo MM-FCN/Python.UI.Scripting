@@ -42,7 +42,9 @@
     }
   ],
   "scrape": {
-    "skip": true
+    "skip": true,
+    "fast_extract_enabled": false,
+    "fast_extract_threshold": 8
   },
   "output": {
     "format": "json",

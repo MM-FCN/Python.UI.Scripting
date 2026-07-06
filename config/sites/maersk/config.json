@@ -87,7 +87,9 @@
         }
       ],
       "scrape": {
-        "list_by": "css",
+      "list_by": "css",
+      "fast_extract_enabled": false,
+      "fast_extract_threshold": 8,
         "list_selector": "div[data-test='transport-plan'] ul[data-test='transport-plan-list'] > li.transport-plan__list__item",
         "allow_empty": true,
         "no_data_selectors": [

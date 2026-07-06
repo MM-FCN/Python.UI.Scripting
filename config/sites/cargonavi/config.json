@@ -115,6 +115,8 @@
       ],
       "scrape": {
         "allow_empty": true,
+        "fast_extract_enabled": false,
+        "fast_extract_threshold": 8,
         "popup_table": {
           "table_selector": "tr[id^='trackShiptable1rowInner'] table.grdTable",
           "row_by": "css",

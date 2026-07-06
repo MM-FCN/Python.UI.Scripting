@@ -151,7 +151,9 @@
         }
       ],
       "scrape": {
-        "list_by": "css",
+      "list_by": "css",
+      "fast_extract_enabled": false,
+      "fast_extract_threshold": 8,
         "list_selector": "#tracing_by_container_f\\:hl66 > tbody > tr",
         "allow_empty": true,
         "no_data_selectors": [

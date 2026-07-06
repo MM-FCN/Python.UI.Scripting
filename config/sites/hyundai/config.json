@@ -104,6 +104,8 @@
       ],
       "scrape": {
         "list_by": "xpath",
+        "fast_extract_enabled": false,
+        "fast_extract_threshold": 8,
         "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[contains(normalize-space(),'Origin')] and .//thead//div[contains(normalize-space(),'Destination')]]//tbody/tr",
         "timeout": 35,
         "allow_empty": true,
@@ -162,6 +164,8 @@
       "navigation_steps": [],
       "scrape": {
         "list_by": "xpath",
+        "fast_extract_enabled": false,
+        "fast_extract_threshold": 8,
         "list_selector": "//div[contains(@class,'table-wrap')][.//thead//div[contains(normalize-space(),'Vessel') and contains(normalize-space(),'Voyage')] and .//thead//div[contains(normalize-space(),'Arrival')]]//tbody/tr",
         "timeout": 35,
         "allow_empty": true,
