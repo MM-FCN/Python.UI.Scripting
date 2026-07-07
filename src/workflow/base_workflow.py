@@ -750,7 +750,8 @@ class WorkflowCrawler:
                 options.page_load_strategy = page_load_strategy
                 if self.headless:
                     options.add_argument("-headless")
-                    options.add_argument("--window-size=1600,1000")
+                    options.add_argument("--window-size=1920,1080")
+                    options.add_argument("--disable-gpu")
                 else:
                     options.add_argument("--start-maximized")
 
