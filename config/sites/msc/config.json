@@ -100,12 +100,21 @@
           "timeout": 12,
           "comment": "若按钮未触发则在输入框按回车兜底提交"
         }
+        ,
+        {
+          "action": "wait",
+          "by": "css",
+          "selector": ".msc-flow-tracking__steps .msc-flow-tracking__port .msc-flow-tracking__step, .msc-search-autocomplete__no-results, .msc-search-autocomplete__empty",
+          "timeout": 35,
+          "comment": "等待结果列表出现或无结果提示，避免直接超时报错"
+        }
       ],
       "scrape": {
         "list_by": "css",
         "fast_extract_enabled": false,
         "fast_extract_threshold": 8,
         "list_selector": ".msc-flow-tracking__steps .msc-flow-tracking__port .msc-flow-tracking__step",
+        "timeout": 35,
         "allow_empty": true,
         "no_data_selectors": [
           ".msc-search-autocomplete__no-results",

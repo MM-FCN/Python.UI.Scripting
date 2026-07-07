@@ -18,8 +18,9 @@
       ],
       "text_contains": [
         "未找到结果",
-        "no data",
+        "no results found",
         "no result",
+        "no data",
         "not found"
       ]
     }
@@ -70,6 +71,13 @@
           "comment": "如出现Cookie弹窗则点击允许全部"
         },
         {
+          "action": "wait_present",
+          "by": "css",
+          "selector": "mc-input[data-test='track-input'] input, input#mc-input-track-input",
+          "timeout": 20,
+          "comment": "等待 shadow host 或底层 input 出现在 DOM 中"
+        },
+        {
           "action": "type_shadow",
           "host_selector": "mc-input[data-test='track-input']",
           "selector": "input#mc-input-track-input",
@@ -85,12 +93,26 @@
           "timeout": 15,
           "comment": "点击跟踪按钮发起查询（兼容英文Track与中文跟踪）"
         }
+        ,
+        {
+          "action": "wait_present",
+          "by": "css",
+          "selector": "div[data-test='transport-plan'], div[data-test='transport-plan'] ul[data-test='transport-plan-list']",
+          "timeout": 45,
+          "comment": "等待结果容器出现在 DOM（不强制可见），更耐异步加载/隐藏场景"
+        },
+        {
+          "action": "sleep",
+          "seconds": 2,
+          "comment": "短暂停顿，允许结果渲染完成后再抓取"
+        }
       ],
       "scrape": {
       "list_by": "css",
       "fast_extract_enabled": false,
       "fast_extract_threshold": 8,
         "list_selector": "div[data-test='transport-plan'] ul[data-test='transport-plan-list'] > li.transport-plan__list__item",
+        "timeout": 35,
         "allow_empty": true,
         "no_data_selectors": [
           "[data-testid='tnt-no-data-found-title']",
