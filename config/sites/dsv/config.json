@@ -102,7 +102,7 @@
       "scrape": {
         "allow_empty": true,
         "list_by": "css",
-        "fast_extract_enabled": false,
+        "fast_extract_enabled": true,
         "fast_extract_threshold": 8,
         "list_selector": "es-status-history table.pt-table tbody tr",
         "fields": [

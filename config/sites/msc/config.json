@@ -71,16 +71,31 @@
           "timeout": 8
         },
         {
-          "action": "wait",
+          "action": "exec_js",
+          "script": "return {hasTrackingId: !!document.getElementById('trackingNumber'), inputs: document.querySelectorAll('input').length, forms: document.querySelectorAll('form').length};"
+        },
+        {
+          "action": "exec_js",
+          "script": "return Array.from(document.querySelectorAll('a')).map(a=>({href:a.href,text:a.innerText||a.title||a.getAttribute('aria-label')||''})).filter(o=>/track|tracking|trace|shipment/i.test(o.href+o.text)).slice(0,20);"
+        },
+        {
+          "action": "goto",
+          "url": "https://www.msccargo.cn/en/track-a-shipment",
+          "after_goto_sleep": 1,
+          "comment": "跳转到 tracking 页面（区域站点）以确保 tracking 表单可用",
+          "timeout": 15
+        },
+        {
+          "action": "wait_present",
           "by": "css",
-          "selector": "input.msc-quicktool__search[x-model='trackingBox.trackingNumber'][data-type='search']",
+          "selector": "input.msc-quicktool__search[x-model='trackingBox.trackingNumber'][data-type='search'], input.msc-quick-access-box__search[x-model='trackingBox.trackingNumber'][data-type='search'], input#trackingNumber[data-type='search'], input[x-model='trackingNumber'][data-type='search']",
           "timeout": 35,
-          "comment": "等待MSC搜索输入框出现（兼容不同页面模板）"
+          "comment": "等待MSC搜索输入框在 DOM 中出现（兼容不同页面模板，包括 id/trackingNumber 或 x-model=trackingNumber）"
         },
         {
           "action": "type",
           "by": "css",
-          "selector": "input.msc-quicktool__search[x-model='trackingBox.trackingNumber'][data-type='search']",
+          "selector": "input.msc-quicktool__search[x-model='trackingBox.trackingNumber'][data-type='search'], input.msc-quick-access-box__search[x-model='trackingBox.trackingNumber'][data-type='search'], input#trackingNumber[data-type='search'], input[x-model='trackingNumber'][data-type='search']",
           "value": "{{ContainerNo}}",
           "timeout": 35,
           "clear_first": true,
@@ -96,7 +111,7 @@
         {
           "action": "press_enter_if_exists",
           "by": "css",
-          "selector": "input.msc-quicktool__search[x-model='trackingBox.trackingNumber'][data-type='search']",
+          "selector": "input.msc-quicktool__search[x-model='trackingBox.trackingNumber'][data-type='search'], input.msc-quick-access-box__search[x-model='trackingBox.trackingNumber'][data-type='search'], input#trackingNumber[data-type='search'], input[x-model='trackingNumber'][data-type='search']",
           "timeout": 12,
           "comment": "若按钮未触发则在输入框按回车兜底提交"
         }

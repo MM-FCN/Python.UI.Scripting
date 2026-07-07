@@ -2371,6 +2371,35 @@ class WorkflowCrawler:
         print(f"[WAIT] URL={self._safe_current_url()}")
         raise TimeoutException(f"Element not visible within timeout: by={by}, selector={selector}")
 
+    def _wait_present_with_captcha_watch(
+        self,
+        by: str,
+        selector: str,
+        timeout: Optional[int] = None,
+        context: str = "",
+    ) -> Any:
+        """Wait for element presence (exists in DOM) while checking captcha in background."""
+        total_timeout = int(timeout or self.default_timeout)
+        by_value = self._to_by(by)
+        end_time = time.time() + total_timeout
+        poll = 0.25
+
+        while time.time() < end_time:
+            self._auto_check_captcha(context=context or f"wait present: {selector}")
+            if self._is_fallback_no_data_matched():
+                raise NoDataMatchedStop("fallback.no_data matched during wait present")
+            try:
+                elements = self.driver.find_elements(by_value, selector)
+                if elements:
+                    return elements[0]
+            except Exception:
+                pass
+            time.sleep(poll)
+
+        print(f"[WAIT] present timeout: by={by}, selector={selector}, timeout={total_timeout}s")
+        print(f"[WAIT] URL={self._safe_current_url()}")
+        raise TimeoutException(f"Element not present within timeout: by={by}, selector={selector}")
+
     def _wait_invisible_with_captcha_watch(
         self,
         by: str,
@@ -3110,6 +3139,20 @@ class WorkflowCrawler:
                     timeout=step.get("timeout"),
                     context=f"step wait ({step.get('selector', '')})",
                 )
+            elif action == "wait_present":
+                self._wait_present_with_captcha_watch(
+                    step["by"],
+                    step["selector"],
+                    timeout=step.get("timeout"),
+                    context=f"step wait_present ({step.get('selector', '')})",
+                )
+            elif action == "exec_js":
+                script = str(step.get("script", ""))
+                try:
+                    result = self.driver.execute_script(script)
+                    print(f"[STEP] exec_js result: {result}")
+                except Exception as e:
+                    print(f"[STEP] exec_js error: {type(e).__name__}: {e}")
             elif action == "wait_invisible":
                 self._wait_invisible_with_captcha_watch(
                     step["by"],
@@ -3670,10 +3713,20 @@ class WorkflowCrawler:
                 t0 = time.time()
                 rows = self._fast_extract(list_selector, fields)
                 extract_time_total = time.time() - t0
-                for row in rows:
-                    if global_row:
-                        row.update(global_row)
-                    all_records.append(row)
+                if rows:
+                    for row in rows:
+                        if global_row:
+                            row.update(global_row)
+                        all_records.append(row)
+                else:
+                    print("[FAST_EXTRACT] empty result, falling back to per-item extraction")
+                    for item in items:
+                        t0 = time.time()
+                        row = self._extract_fields_from_element(item, fields)
+                        extract_time_total += (time.time() - t0)
+                        if global_row:
+                            row.update(global_row)
+                        all_records.append(row)
             else:
                 for item in items:
                     t0 = time.time()
@@ -3745,37 +3798,40 @@ class WorkflowCrawler:
         """
         if not self.driver:
             return []
-
         try:
+            # Use execute_async_script to wait briefly for row rendering/content.
             script = (
-                "(function(sel, fields){"
+                "var sel=arguments[0], fields=arguments[1]||[], timeout=arguments[2]||1500, poll=arguments[3]||100;"
+                "var cb=arguments[arguments.length-1];"
+                "var end=Date.now()+timeout;"
+                "function extract(){"
                 "  try{"
-                "    var rows = document.querySelectorAll(sel);"
-                "    return Array.prototype.map.call(rows, function(tr){"
-                "      var obj = {};"
+                "    var rows = Array.prototype.slice.call(document.querySelectorAll(sel)||[]);"
+                "    var res = rows.map(function(tr){"
+                "      var obj={};"
                 "      fields.forEach(function(field){"
                 "        var name = field && field.name ? field.name : '';"
                 "        var selector = field && field.selector ? field.selector : '';"
                 "        var attr = field && field.attr ? field.attr : 'text';"
                 "        var val = '';"
                 "        try{"
-                "          if(selector){"
-                "            var el = tr.querySelector(selector);"
-                "            if(el){ val = (attr === 'text') ? (el.innerText || '') : (el.getAttribute(attr) || ''); }"
-                "          } else { val = tr.innerText || ''; }"
-                "        }catch(e){ val = ''; }"
-                "        obj[name] = (val === null || val === undefined) ? '' : String(val).trim();"
+                "          if(selector){ var el = tr.querySelector(selector); if(el){ val = (attr==='text') ? (el.innerText||'') : (el.getAttribute(attr)||''); } } else { val = tr.innerText||''; }"
+                "        }catch(e){ val=''; }"
+                "        obj[name] = (val===null||val===undefined)?'':String(val).trim();"
                 "      });"
                 "      return obj;"
                 "    });"
-                "  }catch(e){ return []; }"
-                "})(arguments[0], arguments[1]);"
+                "    var any=false; for(var i=0;i<res.length;i++){ for(var k in res[i]){ if(res[i][k]){ any=true; break;} } if(any) break; }"
+                "    if(res.length>0 && any){ cb(res); return; }"
+                "  }catch(e){}"
+                "  if(Date.now()<end){ setTimeout(extract,poll); return; } cb([]);"
+                "}; extract();"
             )
 
-            result = self.driver.execute_script(script, list_selector, fields or [])
+            # Default timeout 1500ms, poll every 100ms
+            result = self.driver.execute_async_script(script, list_selector, fields or [], 1500, 100)
             if not isinstance(result, list):
                 return []
-            # Ensure all values are strings
             cleaned: List[Dict[str, Any]] = []
             for r in result:
                 if not isinstance(r, dict):
