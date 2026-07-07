@@ -88,18 +88,18 @@
         {
           "action": "type",
           "by": "css",
-          "selector": "input[name='srchCntrNo1']",
+          "selector": "input#esvcGlobalQuery",
           "value": "{{ContainerNo}}",
           "timeout": 20,
           "clear_first": true,
-          "comment": "输入箱号到 Hyundai 查询框"
+          "comment": "输入箱号到 Hyundai 全局查询框（已替换为 #esvcGlobalQuery）"
         },
         {
           "action": "click",
           "by": "css",
-          "selector": "button.btn.line.medium[onclick='search()']",
+          "selector": "button.icon[onclick='esvcGlobalSearch()'], button[onclick='esvcGlobalSearch()']",
           "timeout": 15,
-          "comment": "点击Retrieve按钮执行查询"
+          "comment": "点击全局查询按钮（검색），调用 esvcGlobalSearch() 执行搜索"
         }
       ],
       "scrape": {
