@@ -1,6 +1,6 @@
 {
   "browser": "edge",
-  "base_url": "https://www.msc.com",
+  "base_url": "https://www.msccargo.cn/en/track-a-shipment",
   "edge": {
     "stealth_mode": true,
     "accept_language": "en-US,en;q=0.9",
@@ -69,13 +69,6 @@
           "selector": "#onetrust-accept-btn-handler",
           "comment": "如存在Cookie弹窗则点击Accept All",
           "timeout": 8
-        },
-        {
-          "action": "goto",
-          "url": "https://www.msccargo.cn/en/track-a-shipment",
-          "after_goto_sleep": 1,
-          "comment": "跳转到 tracking 页面（区域站点）以确保 tracking 表单可用",
-          "timeout": 15
         },
         {
           "action": "wait_present",
