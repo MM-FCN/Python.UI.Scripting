@@ -64,6 +64,13 @@
         },
         {
           "action": "click_if_exists",
+          "by": "css",
+          "selector": "button[data-cky-tag='accept-button'], button.cky-btn-accept, button[aria-label='Accept All']",
+          "comment": "如存在 Cookie 弹窗则点击 Accept All",
+          "timeout": 8
+        },
+        {
+          "action": "click_if_exists",
           "by": "xpath",
           "selector": "//div[contains(@class,'Promotion_content') and .//p[contains(normalize-space(),'Customize Columns')]]//button[normalize-space()='Skip' and contains(@class,'PromotionPopoverContent_skip-btn')]",
           "comment": "第2步先定位Customize Columns浮层，再点击其中Skip",

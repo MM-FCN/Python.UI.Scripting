@@ -71,14 +71,6 @@
           "timeout": 8
         },
         {
-          "action": "exec_js",
-          "script": "return {hasTrackingId: !!document.getElementById('trackingNumber'), inputs: document.querySelectorAll('input').length, forms: document.querySelectorAll('form').length};"
-        },
-        {
-          "action": "exec_js",
-          "script": "return Array.from(document.querySelectorAll('a')).map(a=>({href:a.href,text:a.innerText||a.title||a.getAttribute('aria-label')||''})).filter(o=>/track|tracking|trace|shipment/i.test(o.href+o.text)).slice(0,20);"
-        },
-        {
           "action": "goto",
           "url": "https://www.msccargo.cn/en/track-a-shipment",
           "after_goto_sleep": 1,
