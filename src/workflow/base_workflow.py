@@ -33,8 +33,7 @@ from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
-from webdriver_manager.firefox import GeckoDriverManager
+# webdriver-manager removed: require local geckodriver or selenium remote/attach modes
 
 from src.logging_utils import cleanup_old_logs
 
@@ -78,6 +77,7 @@ class WorkflowCrawler:
         self._challenge_debug_enabled: bool = False
         self._challenge_debug_file: Optional[Path] = None
         self._init_challenge_debug()
+        self._edge_stealth_mode: bool = False
 
     def _init_challenge_debug(self) -> None:
         captcha_cfg = self.config.get("login", {}).get("captcha", {})
@@ -637,6 +637,8 @@ class WorkflowCrawler:
                 if not isinstance(edge_cfg, dict):
                     edge_cfg = {}
                 edge_stealth_mode = bool(edge_cfg.get("stealth_mode", True))
+                # persist edge stealth setting to instance for later checks
+                self._edge_stealth_mode = edge_stealth_mode
                 edge_headless_stealth = bool(edge_cfg.get("headless_stealth_enabled", True))
                 edge_accept_language = str(
                     edge_cfg.get("accept_language", "en-US,en;q=0.9")
@@ -811,7 +813,8 @@ class WorkflowCrawler:
         """Inject stealth JS right after driver init, before any business page navigation."""
         if not self.driver:
             return
-        if self._browser_name == "edge":
+        # Only install CDP stealth script for Edge when configured to do so.
+        if self._browser_name == "edge" and getattr(self, '_edge_stealth_mode', False):
             self._install_cdp_stealth_script()
         if self._attached_existing_browser:
             print("[BROWSER] Attached existing browser, skip about:blank bootstrap.")
@@ -955,14 +958,26 @@ class WorkflowCrawler:
         script = built_in_script
         if external_script:
             script = f"{external_script}\n\n{built_in_script}"
+
+        # CDP is disabled: attempt best-effort injection into current document
         try:
-            self.driver.execute_cdp_cmd(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {"source": script},
-            )
-            print("[BROWSER] CDP stealth script installed.")
-        except Exception as e:
-            print(f"[BROWSER] CDP stealth install skipped: {type(e).__name__}: {e}")
+            try:
+                self.driver.execute_script(script)
+                print("[BROWSER] Stealth script injected into current document (CDP disabled).")
+            except Exception:
+                # Fallback: create a script element and append
+                wrapped = (
+                    "(function(){var s=document.createElement('script');"
+                    "s.type='text/javascript'; s.text='" + script.replace("'","\\'") + "';"
+                    "document.documentElement.appendChild(s);})();"
+                )
+                try:
+                    self.driver.execute_script(wrapped)
+                    print("[BROWSER] Stealth script appended as element (CDP disabled).")
+                except Exception as e:
+                    print(f"[BROWSER] Stealth injection skipped: {type(e).__name__}: {e}")
+        except Exception:
+            print("[BROWSER] Stealth injection skipped (unexpected error).")
 
     def _apply_edge_headless_overrides(self, edge_cfg: Dict[str, Any]) -> None:
         """Apply runtime overrides to make Edge headless fingerprint closer to normal desktop browsing."""
@@ -984,26 +999,20 @@ class WorkflowCrawler:
         if not ua_override:
             ua_override = current_ua.replace("HeadlessChrome", "Chrome")
 
+        # CDP disabled: only apply JS-level overrides (won't change network headers)
+        js = f"""
+            try {{ Object.defineProperty(navigator, 'userAgent', {{ get: () => '{ua_override}', configurable: true }}); }} catch(e) {{}}
+            try {{ Object.defineProperty(navigator, 'languages', {{ get: () => ['{accept_language.split(',')[0].strip()}', 'en'], configurable: true }}); }} catch(e) {{}}
+            try {{ Object.defineProperty(navigator, 'platform', {{ get: () => '{platform}', configurable: true }}); }} catch(e) {{}}
+        """
         try:
-            self.driver.execute_cdp_cmd("Network.enable", {})
-            self.driver.execute_cdp_cmd(
-                "Network.setUserAgentOverride",
-                {
-                    "userAgent": ua_override,
-                    "acceptLanguage": accept_language,
-                    "platform": platform,
-                },
-            )
-            print("[BROWSER] Edge headless UA/language/platform override applied.")
+            self.driver.execute_script(js)
+            print("[BROWSER] Applied JS-level headless overrides (CDP disabled).")
         except Exception as e:
-            print(f"[BROWSER] Edge headless UA override skipped: {type(e).__name__}: {e}")
+            print(f"[BROWSER] JS-level headless overrides skipped: {type(e).__name__}: {e}")
 
         if timezone:
-            try:
-                self.driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": timezone})
-                print(f"[BROWSER] Edge headless timezone override applied: {timezone}")
-            except Exception as e:
-                print(f"[BROWSER] Edge headless timezone override skipped: {type(e).__name__}: {e}")
+            print(f"[BROWSER] Timezone override requested ({timezone}) but CDP is disabled; skipped.")
 
     def _override_navigator_webdriver(self) -> None:
         """Inject JS to override automation-related globals on current document."""
@@ -1218,8 +1227,15 @@ class WorkflowCrawler:
                 print(f"[BROWSER] Using local geckodriver: {resolved}")
                 return str(resolved)
 
-        print("[BROWSER] No local geckodriver found, downloading via webdriver-manager...")
-        return GeckoDriverManager().install()
+        # Do not auto-download geckodriver. Require operator to provide a local geckodriver
+        # or use selenium remote/attach mode.
+        msg = (
+            "No local geckodriver found. To avoid implicit driver downloads, "
+            "provide GECKODRIVER_PATH or ensure geckodriver is on PATH, "
+            "or run with selenium remote/attach mode."
+        )
+        print(f"[BROWSER] {msg}")
+        raise FileNotFoundError(msg)
 
     def _resolve_edgedriver_path(self) -> str:
         """Resolve msedgedriver path with local-first strategy for restricted networks."""
@@ -1255,9 +1271,15 @@ class WorkflowCrawler:
             if resolved.exists() and resolved.is_file():
                 print(f"[BROWSER] Using local msedgedriver: {resolved}")
                 return str(resolved)
-
-        print("[BROWSER] No local msedgedriver found, downloading via webdriver-manager...")
-        return EdgeChromiumDriverManager().install()
+        # Do not auto-download msedgedriver to avoid implicit chromedriver usage.
+        # Require operator to provide a local msedgedriver or use attach mode / selenium remote.
+        msg = (
+            "No local msedgedriver found. To avoid using a chromedriver binary, "
+            "start Edge with remote debugging and set `edge.attach_existing=true` and `edge.debugger_address`, "
+            "or provide MSEDGEDRIVER_PATH/msedgedriver on PATH."
+        )
+        print(f"[BROWSER] {msg}")
+        raise FileNotFoundError(msg)
 
     def _login(self) -> None:
         login_cfg = self.config.get("login", {})

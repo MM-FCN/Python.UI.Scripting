@@ -8,12 +8,16 @@
 
 ## 1. 安装
 
-说明：项目使用 Firefox + geckodriver（由 `webdriver-manager` 自动管理）。
+说明：项目支持通过本地浏览器驱动或 Selenium Remote / Edge attach 模式运行。
 
-如果公司网络无法访问 GitHub，可手动放置 `geckodriver.exe`：
+注：为避免在受限网络中自动下载安装驱动，`webdriver-manager` 已从项目依赖中移除，代码不再自动下载 geckodriver/msedgedriver。
 
-- 放到项目根目录（`./geckodriver.exe`）或 `./drivers/geckodriver.exe`
-- 或配置环境变量 `GECKODRIVER_PATH` 指向驱动完整路径
+如果公司网络无法访问 GitHub，请手动准备驱动：
+
+- 将 `geckodriver` / `msedgedriver` 放到项目根目录（`./geckodriver` 或 `./msedgedriver`）或 `./drivers/` 下；
+- 或将驱动路径加入系统 `PATH`；
+- 或设置环境变量 `GECKODRIVER_PATH` / `MSEDGEDRIVER_PATH` 指向驱动完整路径；
+- 另外可使用 Edge attach 模式（见下文）或 Selenium Remote（设置 `selenium_remote_url`）。
 
 ```bash
 python -m venv .venv
@@ -129,7 +133,9 @@ python -m src.main --site cargo --container-no ONEU6961505
 python -m src.main --site edge_attach
 ```
 
-说明：`edge_attach` 站点会连接到 `127.0.0.1:9222`，打印当前页面标题，并默认不关闭你手动打开的 Edge。
+说明：`edge_attach` 站点会连接到 `127.0.0.1:9222`，打印当前页面标题，并默认不关闭你手动打开的 Edge。使用 attach/remote 模式可以保留 CDP 注入能力（例如在需要在文档加载前注入脚本的场景），但如果你运行的是直接由 Selenium 启动的 msedgedriver，项目默认已禁用 CDP 注入以避免在不支持 goog/cdp 的驱动上报错。
+
+当你希望在每个新文档加载前注入 stealth 脚本，请优先使用 Edge attach（远程调试）或 Selenium Remote 实例；在直接由 Selenium 启动的场景，本项目改为在页面加载后通过 `execute_script` 注入（仅作用于当前文档）。
 
 接管浏览器后直接执行 hapag 配置抓取：
 

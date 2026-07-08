@@ -21,7 +21,16 @@ try:
     stealth_js_path = Path(__file__).with_name('stealth.min.js')
     with stealth_js_path.open('r', encoding='utf-8') as f:
         js = f.read()
-    driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {'source': js})
+    try:
+        driver.execute_script(js)
+        print('Stealth script injected via execute_script')
+    except Exception:
+        try:
+            wrapped = "(function(){var s=document.createElement('script');s.type='text/javascript';s.text='" + js.replace("'","\\'") + "';document.documentElement.appendChild(s);})();"
+            driver.execute_script(wrapped)
+            print('Stealth script appended as element')
+        except Exception as e:
+            print(f'Stealth injection skipped: {e}')
 
     #driver.get("https://bot.sannysoft.com")
     driver.get("https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html")
