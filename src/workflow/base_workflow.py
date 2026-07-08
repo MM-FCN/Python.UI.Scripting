@@ -710,8 +710,11 @@ class WorkflowCrawler:
                     self._runtime_edge_profile_dir = runtime_profile
                     options.add_argument(f"--user-data-dir={runtime_profile}")
                     print(f"[BROWSER] Edge direct mode using isolated runtime profile: {runtime_profile}")
-                elif remote_mode and edge_user_data_dir:
-                    print("[BROWSER] Edge user_data_dir ignored in remote Selenium mode.")
+                elif remote_mode:
+                    print("remote Selenium mode set user data")
+                    options.add_argument("--user-data-dir=/home/seluser/.config/microsoft-edge")
+                    options.add_argument("--no-sandbox")
+                    options.add_argument("--disable-gpu")
 
                 for arg in edge_extra_args:
                     arg_str = str(arg).strip()
