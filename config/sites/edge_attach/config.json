@@ -6,7 +6,9 @@
   "startup_navigate": false,
   "keep_browser_open": true,
   "edge": {
-    "attach_existing": true,
+    "attach_existing": false,
+    "user_data_dir": "C:/MyEdgeData",
+    "use_user_profile": true,
     "debugger_address": "127.0.0.1:9222"
   },
   "login": {

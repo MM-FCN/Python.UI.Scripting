@@ -653,6 +653,10 @@ class WorkflowCrawler:
                 edge_user_data_dir = str(
                     edge_cfg.get("user_data_dir", self.config.get("edge_user_data_dir", ""))
                 ).strip()
+                # New toggle: whether to reuse the user profile directory when launching Edge.
+                # If false, the crawler will always use an isolated runtime profile even when
+                # `user_data_dir` is configured.
+                use_user_profile = bool(edge_cfg.get("use_user_profile", self.config.get("edge_use_user_profile", True)))
                 if edge_user_data_dir:
                     edge_user_data_dir = os.path.expanduser(os.path.expandvars(edge_user_data_dir))
                 edge_extra_args = edge_cfg.get("extra_args", [])
@@ -691,7 +695,7 @@ class WorkflowCrawler:
                     options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
                     options.add_experimental_option("useAutomationExtension", False)
 
-                if edge_user_data_dir and not attach_existing and not remote_mode:
+                if edge_user_data_dir and use_user_profile and not attach_existing and not remote_mode:
                     try:
                         Path(edge_user_data_dir).mkdir(parents=True, exist_ok=True)
                     except Exception:

@@ -18,7 +18,8 @@
   "edge": {
     "stealth_mode": true,
     "accept_language": "en-US,en;q=0.9",
-    "user_data_dir": "",
+    "user_data_dir": "C:/MyEdgeData",
+    "use_user_profile": true,
     "attach_existing": false,
     "debugger_address": ""
   },

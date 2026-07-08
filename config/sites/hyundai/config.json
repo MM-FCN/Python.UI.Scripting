@@ -4,7 +4,8 @@
   "edge": {
     "stealth_mode": true,
     "accept_language": "en-US,en;q=0.9",
-    "user_data_dir": "",
+    "user_data_dir": "C:/MyEdgeData",
+    "use_user_profile": true,
     "attach_existing": false,
     "debugger_address": ""
   },
@@ -100,6 +101,14 @@
           "selector": "button.icon[onclick='esvcGlobalSearch()'], button[onclick='esvcGlobalSearch()']",
           "timeout": 15,
           "comment": "点击全局查询按钮（검색），调用 esvcGlobalSearch() 执行搜索"
+        }
+        ,
+        {
+          "action": "wait_present",
+          "by": "xpath",
+          "selector": "//div[contains(@class,'table-wrap')]//tbody/tr | //table//tbody/tr",
+          "timeout": 30,
+          "comment": "等待结果行出现，避免因渲染延迟导致超时"
         }
       ],
       "scrape": {
