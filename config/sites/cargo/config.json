@@ -71,19 +71,29 @@
           "timeout": 8
         },
         {
+          "action": "sleep",
+          "seconds": 0.5,
+          "comment": "短等待，减少瞬态漏判"
+        },
+        {
           "action": "click_if_exists",
           "by": "xpath",
           "selector": "//div[contains(@class,'Promotion_content') and .//p[contains(normalize-space(),'Customize Columns')]]//button[normalize-space()='Skip' and contains(@class,'PromotionPopoverContent_skip-btn')]",
-          "comment": "第2步先定位Customize Columns浮层，再点击其中Skip",
-          "timeout": 1,
+          "comment": "第2步先定位Customize Columns浮层，再点击其中Skip；调整超时/重试参数以降低漏点",
+          "timeout": 3,
           "max_rounds": 25,
           "post_click_invisible_by": "xpath",
           "post_click_invisible_selector": "//div[contains(@class,'Promotion_content') and .//p[contains(normalize-space(),'Customize Columns')]]",
-          "post_click_invisible_timeout": 2,
+          "post_click_invisible_timeout": 4,
           "check_next_on_timeout": true,
           "next_by": "xpath",
           "next_selector": "(//div[contains(@class,'Select_select-container')])[1]",
-          "next_check_timeout": 1
+          "next_check_timeout": 2
+        },
+        {
+          "action": "sleep",
+          "seconds": 0.5,
+          "comment": "点击后短等待，防止瞬态状态"
         },
         {
           "action": "click_if_exists",
