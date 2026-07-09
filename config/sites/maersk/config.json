@@ -2,7 +2,7 @@
   "browser": "edge",
   "base_url": "https://www.maersk.com/tracking/",
   "edge": {
-    "stealth_mode": true,
+    "stealth_mode": false,
     "accept_language": "en-US,en;q=0.9",
     "user_data_dir": "C:/MyEdgeData",
     "use_user_profile": true,

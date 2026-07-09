@@ -3,6 +3,9 @@
   "base_url": "https://www.cssplus.kwe.com/",
   "default_timeout": 15,
   "download_dir": "output/downloads",
+  "edge": {
+    "stealth_mode": false
+  },
   "fallback": {
     "no_data": {
       "require_any_fields": [

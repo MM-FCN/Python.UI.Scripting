@@ -3,6 +3,9 @@
   "base_url": "https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml",
   "default_timeout": 15,
   "download_dir": "output/enx_air/downloads",
+    "edge": {
+    "stealth_mode": false
+  },
   "log": {
     "retention_days": 30
   },
