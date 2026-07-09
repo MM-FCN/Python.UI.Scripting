@@ -75,7 +75,7 @@
       "reuse_trigger_site_session": false
     },
     "parallel": {
-      "enabled": true,
+      "enabled": false,
       "max_workers": 3,
       "chunk_size": 0
     },

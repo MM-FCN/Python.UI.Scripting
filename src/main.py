@@ -2234,25 +2234,34 @@ def _run_input_timer_mode(
                                         "deferred_output_items": deferred_items,
                                     })
                     else:
+                        # Process batch items one-by-one without reusing a shared browser session.
+                        # This ensures each job starts and closes its own browser instance.
                         print(
-                            f"[WATCH] Batch file reuse mode enabled: file={file_path.name}, "
+                            f"[WATCH] Batch processing (no shared session) for file={file_path.name}, "
                             f"jobs={len(job_params_list)}"
                         )
-                        ok, batch_results = run_config_batch_reuse_session(
-                            str(cfg_path),
-                            headless=headless,
-                            params_list=job_params_list,
-                            base_url_override=base_url_override,
-                            defer_output_save=bool(callback_uri),
-                            selenium_remote_url=selenium_remote_url,
-                        )
-                        if not ok:
-                            success = False
-                        processed_jobs.extend([
-                            {
-                                "params": dict(job.get("params", {})) if isinstance(job.get("params", {}), dict) else {},
-                                "records": job.get("records", []) if isinstance(job.get("records", []), list) else [],
+                        batch_results: list[dict[str, Any]] = []
+                        for one_params in job_params_list:
+                            ok, records, deferred_items = run_config(
+                                str(cfg_path),
+                                headless=headless,
+                                params=one_params,
+                                base_url_override=base_url_override,
+                                defer_output_save=bool(callback_uri),
+                                selenium_remote_url=selenium_remote_url,
+                            )
+                            if not ok:
+                                success = False
+                            entry = {
+                                "params": dict(one_params) if isinstance(one_params, dict) else {},
+                                "records": records if isinstance(records, list) else [],
                             }
+                            if isinstance(deferred_items, list) and deferred_items:
+                                entry["deferred_output_items"] = deferred_items
+                            batch_results.append(entry)
+
+                        processed_jobs.extend([
+                            {"params": job.get("params", {}), "records": job.get("records", [])}
                             for job in batch_results
                         ])
                         if callback_uri:
