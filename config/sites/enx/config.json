@@ -3,6 +3,9 @@
   "base_url": "https://e-nx.nipponexpress.com/faces/pages/sptrctrc/enx_sptrctrc_010.xhtml",
   "default_timeout": 15,
   "download_dir": "output/enx/downloads",
+  "edge": {
+    "stealth_mode": false
+  },
   "fallback": {
     "no_data": {
       "require_any_fields": [
