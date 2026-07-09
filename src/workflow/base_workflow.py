@@ -13,7 +13,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
 from PIL import Image
 from selenium import webdriver
@@ -666,10 +665,11 @@ class WorkflowCrawler:
                     edge_extra_args = []
                 if self.headless:
                     options.add_argument("--headless=new")
-                    options.add_argument("--window-size=1600,1000")
-                    options.add_argument("--window-position=0,0")
+                    options.add_argument("--window-size=1920,1080")
+                    options.add_argument("--disable-gpu")
+                    options.add_argument("--no-sandbox")
                     options.add_argument("--force-device-scale-factor=1")
-                    options.add_argument("--hide-scrollbars")
+                    options.add_argument("--disable-blink-features=AutomationControlled")
                 else:
                     options.add_argument("--start-maximized")
 
@@ -710,8 +710,11 @@ class WorkflowCrawler:
                     self._runtime_edge_profile_dir = runtime_profile
                     options.add_argument(f"--user-data-dir={runtime_profile}")
                     print(f"[BROWSER] Edge direct mode using isolated runtime profile: {runtime_profile}")
-                elif remote_mode and edge_user_data_dir:
-                    print("[BROWSER] Edge user_data_dir ignored in remote Selenium mode.")
+                elif remote_mode:
+                    print("remote Selenium mode set user data")
+                    options.add_argument("--user-data-dir=/home/seluser/.config/microsoft-edge")
+                    options.add_argument("--no-sandbox")
+                    options.add_argument("--disable-gpu")
 
                 for arg in edge_extra_args:
                     arg_str = str(arg).strip()
@@ -756,8 +759,6 @@ class WorkflowCrawler:
                 options.page_load_strategy = page_load_strategy
                 if self.headless:
                     options.add_argument("-headless")
-                    options.add_argument("--window-size=1920,1080")
-                    options.add_argument("--disable-gpu")
                 else:
                     options.add_argument("--start-maximized")
 
