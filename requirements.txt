@@ -3,3 +3,4 @@ beautifulsoup4==4.12.3
 python-dotenv==1.0.1
 numpy==2.2.5
 Pillow==11.2.1
+webdriver-manager==4.0.2
