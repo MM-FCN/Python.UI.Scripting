@@ -2377,9 +2377,28 @@ def _run_input_timer_mode(
                         record_count_by_value[value] = len(records_obj)
 
                     state_rows: list[dict[str, Any]] = []
+                    # Persist outputs for individual successful items when batch has partial failures.
+                    if callback_uri and not success and processed_jobs:
+                        for job in processed_jobs:
+                            params_obj = job.get("params", {}) if isinstance(job.get("params", {}), dict) else {}
+                            recs = job.get("records", []) if isinstance(job.get("records", []), list) else []
+                            if recs:
+                                try:
+                                    ok_save = _persist_output_records_from_history(
+                                        config_path=str(cfg_path),
+                                        headless=headless,
+                                        params=params_obj,
+                                        base_url_override=base_url_override,
+                                        records=recs,
+                                    )
+                                    if not ok_save:
+                                        print(f"[WATCH] Failed to persist output for partial-success item: {params_obj}")
+                                except Exception as e:
+                                    print(f"[WATCH] Exception while persisting partial-success output: {e}")
+
                     for value in attempted_values:
-                        if value in record_count_by_value:
-                            status = "success" if success else "crawl_ok_push_failed"
+                        if value in record_count_by_value and record_count_by_value.get(value, 0) > 0:
+                            status = "success"
                             state_rows.append({
                                 "item_value": value,
                                 "status": status,
