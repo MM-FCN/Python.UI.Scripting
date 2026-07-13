@@ -654,6 +654,18 @@ class WorkflowCrawler:
                 edge_user_data_dir = str(
                     edge_cfg.get("user_data_dir", self.config.get("edge_user_data_dir", ""))
                 ).strip()
+                remote_use_user_profile = bool(
+                    edge_cfg.get(
+                        "remote_use_user_profile",
+                        self.config.get("edge_remote_use_user_profile", True),
+                    )
+                )
+                remote_user_data_dir = str(
+                    edge_cfg.get(
+                        "remote_user_data_dir",
+                        self.config.get("edge_remote_user_data_dir", "/home/seluser/.config/microsoft-edge"),
+                    )
+                ).strip()
                 # New toggle: whether to reuse the user profile directory when launching Edge.
                 # If false, the crawler will always use an isolated runtime profile even when
                 # `user_data_dir` is configured.
@@ -711,8 +723,11 @@ class WorkflowCrawler:
                     options.add_argument(f"--user-data-dir={runtime_profile}")
                     print(f"[BROWSER] Edge direct mode using isolated runtime profile: {runtime_profile}")
                 elif remote_mode:
-                    print("remote Selenium mode set user data")
-                    options.add_argument("--user-data-dir=/home/seluser/.config/microsoft-edge")
+                    if remote_use_user_profile and remote_user_data_dir:
+                        print(f"[BROWSER] Edge remote mode using user data dir: {remote_user_data_dir}")
+                        options.add_argument(f"--user-data-dir={remote_user_data_dir}")
+                    else:
+                        print("[BROWSER] Edge remote mode using clean runtime profile (no user-data-dir).")
                     options.add_argument("--no-sandbox")
                     options.add_argument("--disable-gpu")
 
@@ -934,11 +949,17 @@ class WorkflowCrawler:
             // permissions API patch used by many bot checks
             const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
             if (originalQuery) {
-                window.navigator.permissions.query = (parameters) => (
-                    parameters && parameters.name === 'notifications'
-                        ? Promise.resolve({ state: Notification.permission })
-                        : originalQuery(parameters)
-                );
+                window.navigator.permissions.query = (parameters) => {
+                    const isNotifications = parameters && parameters.name === 'notifications';
+                    if (!isNotifications) {
+                        return originalQuery.call(window.navigator.permissions, parameters);
+                    }
+                    const notificationState =
+                        (typeof window.Notification !== 'undefined' && window.Notification && window.Notification.permission)
+                            ? window.Notification.permission
+                            : 'default';
+                    return Promise.resolve({ state: notificationState });
+                };
             }
 
             // avoid obvious headless geometry mismatch
@@ -958,25 +979,46 @@ class WorkflowCrawler:
         external_script = self._load_external_stealth_js()
         script = built_in_script
         if external_script:
-            script = f"{external_script}\n\n{built_in_script}"
+            wrapped_external_script = f"""
+                (function() {{
+                    try {{
+                        {external_script}
+                    }} catch (e) {{
+                        console.warn('[BROWSER] External stealth JS runtime skipped:', e);
+                    }}
+                }})();
+            """
+            script = f"{wrapped_external_script}\n\n{built_in_script}"
 
-        # CDP is disabled: attempt best-effort injection into current document
+        # CDP is disabled: attempt best-effort injection into current document.
+        # Use script argument passing in fallback to avoid escaping/quoting parse errors.
         try:
             try:
                 self.driver.execute_script(script)
                 print("[BROWSER] Stealth script injected into current document (CDP disabled).")
-            except Exception:
-                # Fallback: create a script element and append
-                wrapped = (
-                    "(function(){var s=document.createElement('script');"
-                    "s.type='text/javascript'; s.text='" + script.replace("'","\\'") + "';"
-                    "document.documentElement.appendChild(s);})();"
-                )
+                return
+            except Exception as direct_err:
+                # Fallback: create a script element and append; pass content via argument.
+                wrapped = """
+                    (function(stealthSource){
+                        var s = document.createElement('script');
+                        s.type = 'text/javascript';
+                        s.text = stealthSource;
+                        (document.documentElement || document.head || document.body).appendChild(s);
+                        if (s.parentNode) {
+                            s.parentNode.removeChild(s);
+                        }
+                    })(arguments[0]);
+                """
                 try:
-                    self.driver.execute_script(wrapped)
-                    print("[BROWSER] Stealth script appended as element (CDP disabled).")
-                except Exception as e:
-                    print(f"[BROWSER] Stealth injection skipped: {type(e).__name__}: {e}")
+                    self.driver.execute_script(wrapped, script)
+                    print("[BROWSER] Stealth script appended as element (CDP disabled fallback).")
+                except Exception as fallback_err:
+                    print(
+                        "[BROWSER] Stealth injection skipped: "
+                        f"direct={type(direct_err).__name__}: {direct_err}; "
+                        f"fallback={type(fallback_err).__name__}: {fallback_err}"
+                    )
         except Exception:
             print("[BROWSER] Stealth injection skipped (unexpected error).")
 
@@ -1139,6 +1181,46 @@ class WorkflowCrawler:
                 self.driver.set_page_load_timeout(page_load_timeout)
                 self.driver.get(url)
                 self._override_navigator_webdriver()
+
+                # Short wait then detect common transient error pages (e.g. HTTP/2 protocol errors)
+                time.sleep(float(self.config.get("startup_nav_postwait", 0.5)))
+                page_title = ""
+                page_body = ""
+                try:
+                    page_title = (self.driver.title or "")
+                except Exception:
+                    page_title = ""
+                try:
+                    page_body = str(self.driver.execute_script("return document.body ? document.body.innerText : ''") or "")
+                except Exception:
+                    page_body = ""
+
+                title_lower = page_title.lower()
+                body_lower = page_body.lower()
+                error_markers = ["can't reach this page", "err_http2_protocol_error", "this site can\u2019t be reached", "your connection was interrupted"]
+                if any(m in title_lower or m in body_lower for m in error_markers):
+                    if attempt < max_attempts:
+                        print(f"[STEP 2] Detected transient error page (title/body). Refreshing and retrying (attempt {attempt}/{max_attempts})")
+                        try:
+                            self.driver.refresh()
+                            time.sleep(0.5)
+                            # If refresh yields a complete document, accept it as success
+                            ready_state = "(unknown)"
+                            try:
+                                ready_state = str(self.driver.execute_script("return document.readyState"))
+                            except Exception:
+                                pass
+                            if ready_state == "complete":
+                                print(f"[STEP 2] Page loaded after refresh, continue.")
+                                return
+                        except Exception as refresh_err:
+                            print(f"[STEP 2] Refresh attempt failed: {refresh_err}")
+                        # continue to next attempt (which may restart browser)
+                        continue
+                    else:
+                        print("[STEP 2] Persistent error page detected and no retry left.")
+                        raise WebDriverException("Persistent error page after navigation")
+
                 print(f"[STEP 2] Navigation success on attempt {attempt}/{max_attempts}")
                 return
             except TimeoutException as e:
