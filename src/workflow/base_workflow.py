@@ -677,9 +677,6 @@ class WorkflowCrawler:
                     edge_extra_args = []
                 if self.headless:
                     options.add_argument("--headless=new")
-                    options.add_argument("--window-size=1920,1080")
-                    options.add_argument("--disable-gpu")
-                    options.add_argument("--no-sandbox")
                     options.add_argument("--force-device-scale-factor=1")
                     options.add_argument("--disable-blink-features=AutomationControlled")
                 else:
@@ -723,11 +720,8 @@ class WorkflowCrawler:
                     options.add_argument(f"--user-data-dir={runtime_profile}")
                     print(f"[BROWSER] Edge direct mode using isolated runtime profile: {runtime_profile}")
                 elif remote_mode:
-                    if remote_use_user_profile and remote_user_data_dir:
-                        print(f"[BROWSER] Edge remote mode using user data dir: {remote_user_data_dir}")
-                        options.add_argument(f"--user-data-dir={remote_user_data_dir}")
-                    else:
-                        print("[BROWSER] Edge remote mode using clean runtime profile (no user-data-dir).")
+                    print("remote Selenium mode set user data")
+                    options.add_argument("--user-data-dir=/home/seluser/.config/microsoft-edge")
                     options.add_argument("--no-sandbox")
                     options.add_argument("--disable-gpu")
 
