@@ -1,5 +1,6 @@
 {
   "browser": "edge",
+  "crawl_strategy": "anonymous",
   "base_url": "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do",
   "edge": {
     "stealth_mode": true,

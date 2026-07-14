@@ -35,6 +35,7 @@ pip install -r requirements.txt
 - 进入目标页面的步骤（`navigation_steps`）
 - 数据列表选择器和字段选择器（`scrape`）
 - 多任务模式可用 `tasks`，每个任务配置独立的 `navigation_steps/scrape/output`
+- 可选 `crawl_strategy`：`default` 或 `anonymous`（未配置或非法值自动回退 `default`）
 
 2. 创建 `.env`（用于账号密码）：
 
@@ -47,6 +48,8 @@ SITE_PASSWORD=你的密码
 
 ```json
 {
+	"selenium_remote_url": "http://szh2vm0372.apac.bosch.com:4444/wd/hub",
+	"selenium_remote_anonymous_url": "http://szh2vm0372.apac.bosch.com:4445/wd/hub",
 	"watch": {
 		"enabled_by_default": true,
 		"interval_seconds": 10,
@@ -77,6 +80,8 @@ SITE_PASSWORD=你的密码
 
 配置项说明：
 
+- `selenium_remote_url`：默认 Selenium Remote 地址。
+- `selenium_remote_anonymous_url`：匿名策略 Selenium Remote 地址。
 - `watch`：轮询相关总配置对象。
 - `watch.log`：运行日志总配置对象。
 - `watch.log.max_mb`：单个运行日志文件大小上限（MB）。达到上限后不会生成 `.1/.2` 轮转文件，而是按环形覆盖保留最新日志窗口。
@@ -99,6 +104,12 @@ SITE_PASSWORD=你的密码
 - `watch.db_config.state_db_path`：单号状态库路径（SQLite）。
 - `watch.db_config.max_size_mb`：单号状态库文件大小上限（MB）。超过上限时，会在处理单个 input 文件开始前清空并重建状态库。
 - input JSON 支持批量字段：`ContainerNo` / `MAWB` 可传字符串或数组；传数组时会逐条执行抓取并逐条推送。
+
+站点远程策略说明（在启用 `--selenium-remote-url` 时生效）：
+
+- `crawl_strategy=default`：使用 `selenium_remote_url`。
+- `crawl_strategy=anonymous`：优先使用 `selenium_remote_anonymous_url`，为空时回退 `selenium_remote_url`。
+- 未配置 `crawl_strategy` 或配置非法值：回退 `default`。
 
 说明：
 
